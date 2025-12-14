@@ -3,7 +3,7 @@
 > 版本：v0.1（前端 MVP 规格）  
 > 目标站点：`https://developer.onekey.so/`（静态站点，GitHub Pages 托管）  
 > 后端服务：OneKey RAG Service（OpenAI 兼容接口）  
-> 主要接口：`POST /v1/chat/completions`、`GET /v1/models`、`POST /v1/feedback`  
+> 主要接口：`POST /v1/chat/completions`、`POST /v1/feedback`  
 
 ---
 
@@ -74,8 +74,8 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为降
 
 **输入框（Composer）**
 - Enter 发送；Shift+Enter 换行
-- “停止生成”按钮（Abort）
-- “重新生成”按钮（对最后一个 user 消息重试）
+- 流式生成中：发送按钮置灰（MVP 不提供“停止生成”按钮）
+- “重新生成”按钮（对最后一个 user 消息重试，后续可做）
 
 **消息操作**
 - 复制回答（可选：含/不含引用）
@@ -96,11 +96,6 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为降
 
 注意：
 - 当前后端 sources 只保证 URL 与 snippet，不保证段落级 anchor；“段落高亮/定位”属于后续增强（见 TODO）。
-
-### 2.4 模型选择（可选）
-- 调用 `GET /v1/models` 列出可用模型（如 `onekey-docs`）
-- UI 提供下拉选择；默认选中 `onekey-docs`
-- 选择结果 localStorage 记忆
 
 ### 2.5 反馈闭环（MVP 必做）
 对每条 assistant 回复提供：
@@ -127,7 +122,7 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为降
 - `streaming`：流式接收中
 - `done`：完成
 - `error`：失败（可重试）
-- `aborted`：用户停止
+- `aborted`：用户中断（如 clear/关闭弹窗导致的 Abort）
 
 ### 3.2 并发策略
 - 同一会话同一时间只允许一个进行中的请求
@@ -136,9 +131,9 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为降
   - 方案 B：提示“正在生成，是否停止并发送新问题？”
 
 ### 3.3 中断（Stop generating）
-- 使用 `AbortController.abort()`
-- UI 立即停止追加 token，标记为 `aborted`
-- 允许“继续问/重试”
+（MVP）不提供显式“停止生成”按钮；通过以下方式中断：
+- `Clear` 清空会话（内部使用 `AbortController.abort()`）
+- 关闭弹窗（内部使用 `AbortController.abort()`）
 
 ---
 
@@ -151,34 +146,7 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为降
 - CORS 允许 `https://developer.onekey.so`（及预发布域名）
 - 建议在网关侧增加限流（避免公开站点被刷）
 
-### 4.2 `GET /v1/models`
-用途：模型选择
-
-请求：
-```http
-GET /v1/models
-```
-
-响应（示例）：
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "onekey-docs",
-      "object": "model",
-      "created": 1734150000,
-      "owned_by": "onekey",
-      "meta": {
-        "upstream_model": "deepseek-chat",
-        "base_url": "https://api.deepseek.com/v1"
-      }
-    }
-  ]
-}
-```
-
-### 4.3 `POST /v1/chat/completions`（非流式）
+### 4.2 `POST /v1/chat/completions`（非流式）
 请求体（最小示例）：
 ```json
 {
@@ -210,7 +178,7 @@ GET /v1/models
 - 使用 Markdown 渲染 `content`（代码块需提供复制按钮）
 - 解析 `content` 中的 `[n]`，与 `sources[].ref` 对齐
 
-### 4.4 `POST /v1/chat/completions`（流式 SSE，POST）
+### 4.3 `POST /v1/chat/completions`（流式 SSE，POST）
 注意：这是 **POST SSE**（不是 EventSource 的 GET SSE）。推荐使用 `@microsoft/fetch-event-source` 或自行解析 `ReadableStream`。
 
 请求体：
@@ -240,7 +208,7 @@ data: [DONE]
 - 遇到 `chat.completion.sources`：更新 sources 面板
 - 遇到 `[DONE]`：结束 streaming，记录 `message_id`（即响应中的 `id`）
 
-### 4.5 `POST /v1/feedback`
+### 4.4 `POST /v1/feedback`
 用途：对单条 assistant 回复反馈
 
 建议前端生成：
@@ -280,7 +248,7 @@ data: [DONE]
 
 可选配置（两种方式二选一）：
 1) `data-*` 属性（推荐，简单直观）：
-- `data-model`：默认模型 id（对应 `GET /v1/models` 的 `id`）
+- `data-model`：默认模型 id（用于请求体 `model` 字段；当前 Widget 不提供下拉选择）
 - `data-title`：iframe 标题/头部标题
 - `data-button-label`：右下角按钮文案（默认 `Ask AI`）
 - `data-width`：弹窗宽度（历史兼容字段，默认 `860px`）
@@ -347,7 +315,7 @@ window.OneKeyRAGWidgetConfig = {
 - 非流式：能显示答案、能显示 sources
 - 流式：逐字显示；收到 sources 事件；最后 `[DONE]`
 - inline citation：点击 `[n]` 可定位到 sources
-- abort：停止生成后不再追加 token
+- abort：clear/关闭后不再追加 token
 - 反馈：能提交 `/v1/feedback`
 
 ### 7.2 性能建议

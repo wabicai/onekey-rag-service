@@ -1,9 +1,20 @@
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-
-import { Button } from "./components/ui/button";
-import { Textarea } from "./components/ui/textarea";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import {
+  Check,
+  Copy,
+  ExternalLink,
+  SendHorizonal,
+  Sparkles,
+  ThumbsDown,
+  ThumbsUp,
+  User,
+  X,
+} from "lucide-react";
 
 type Role = "user" | "assistant";
 
@@ -24,16 +35,6 @@ type ChatMessage = {
   sources?: SourceItem[];
   status?: "streaming" | "done" | "error" | "aborted";
   errorText?: string;
-};
-
-type OpenAIListModelsResponse = {
-  object: "list";
-  data: Array<{
-    id: string;
-    object: "model";
-    owned_by?: string;
-    meta?: Record<string, unknown>;
-  }>;
 };
 
 function nowMs() {
@@ -57,8 +58,8 @@ function joinUrl(base: string, path: string) {
 }
 
 function linkCitationsForMarkdown(text: string) {
-  // 把正文里的 [n] 替换成一个 markdown link：[[n]](#cite-n)
-  // 这样在渲染 <a> 时可以识别为“引用”，并做成 tooltip/弹窗。
+  // 把正文里的 [n] 替换成一个 markdown link：<n>(#cite-n)
+  // 这样在渲染 <a> 时可以识别为“引用”，并做成内联引用样式。
   const lines = (text || "").split("\n");
   let inFence = false;
   const out: string[] = [];
@@ -72,7 +73,13 @@ function linkCitationsForMarkdown(text: string) {
       out.push(line);
       continue;
     }
-    out.push(line.replace(/\[(\d{1,3})\]/g, (_m, n) => `[[${n}]](#cite-${n})`));
+    // 避免误伤 inline code：按 ` 分割，仅替换非 code 片段
+    const segs = line.split("`");
+    for (let i = 0; i < segs.length; i += 2) {
+      // 避免误伤 markdown link：排除 "[n](" 这种情况
+      segs[i] = segs[i].replace(/\[(\d{1,3})\](?!\()/g, (_m, n) => `[${n}](#cite-${n})`);
+    }
+    out.push(segs.join("`"));
   }
   return out.join("\n");
 }
@@ -150,56 +157,80 @@ async function streamSSE(url: string, body: unknown, signal: AbortSignal, cb: St
   cb.onDone();
 }
 
+async function copyToClipboard(text: string): Promise<boolean> {
+  if (!text) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // 兼容旧浏览器：使用 document.execCommand('copy')
+    try {
+      const el = document.createElement("textarea");
+      el.value = text;
+      el.setAttribute("readonly", "true");
+      el.style.position = "fixed";
+      el.style.left = "-9999px";
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(el);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function clamp(n: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, n));
+}
+
+function parseUrl(url: string) {
+  try {
+    const u = new URL(url);
+    const path = `${u.pathname}${u.search}${u.hash}`.replace(/\/$/, "");
+    return { host: u.host, path: path || "/" };
+  } catch {
+    return { host: "", path: url };
+  }
+}
+
+function getSourceRef(s: SourceItem, idx: number) {
+  const r = typeof s.ref === "number" ? s.ref : null;
+  if (r && r > 0) return r;
+  return idx + 1;
+}
+
 export default function App() {
   const sp = useMemo(() => new URLSearchParams(window.location.search), []);
-  const queryTitle = sp.get("title") || "OneKey 文档助手";
-  const initialModel = sp.get("model") || "onekey-docs";
+  const title = sp.get("title") || "Ask AI";
+  const model = sp.get("model") || "onekey-docs";
   const parentOrigin = sp.get("parent_origin") || "";
   const apiBase = sp.get("api_base") || "";
+  const contactUrl = sp.get("contact_url") || "https://onekey.so";
 
-  const [title] = useState(queryTitle);
   const [pageUrl, setPageUrl] = useState<string>("");
-  const [models, setModels] = useState<string[]>([]);
-  const [model, setModel] = useState<string>(() => localStorage.getItem("onekey_rag_widget_model") || initialModel);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [errorBanner, setErrorBanner] = useState<string>("");
-  const [openSourcesFor, setOpenSourcesFor] = useState<string | null>(null);
-  const [activeCitation, setActiveCitation] = useState<{ ref: number; x: number; y: number; msgId: string } | null>(
-    null
-  );
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const [copiedCodeKey, setCopiedCodeKey] = useState<string | null>(null);
+  const [highlightedSourceId, setHighlightedSourceId] = useState<string | null>(null);
 
   const conversationIdRef = useRef<string>(
     localStorage.getItem("onekey_rag_widget_conversation_id") || safeRandomId("conv")
   );
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const apiModelsUrl = joinUrl(apiBase, "/v1/models");
   const apiChatUrl = joinUrl(apiBase, "/v1/chat/completions");
   const apiFeedbackUrl = joinUrl(apiBase, "/v1/feedback");
 
   useEffect(() => {
     localStorage.setItem("onekey_rag_widget_conversation_id", conversationIdRef.current);
   }, []);
-
-  useEffect(() => {
-    localStorage.setItem("onekey_rag_widget_model", model);
-  }, [model]);
-
-  useEffect(() => {
-    // 拉取模型列表（失败则忽略）
-    fetchJson<OpenAIListModelsResponse>(apiModelsUrl)
-      .then((data) => {
-        const ids = (data?.data || []).map((m) => m.id).filter(Boolean);
-        setModels(ids.length ? ids : [initialModel]);
-      })
-      .catch(() => {
-        setModels([initialModel]);
-      });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiModelsUrl]);
 
   useEffect(() => {
     // 监听父页面传入上下文
@@ -209,6 +240,12 @@ export default function App() {
       if (!data || typeof data !== "object") return;
       if (data.type === "onekey_rag_widget:context") {
         if (typeof data.page_url === "string") setPageUrl(data.page_url);
+        return;
+      }
+      if (data.type === "onekey_rag_widget:host_closed") {
+        abortRef.current?.abort();
+        setIsStreaming(false);
+        return;
       }
     }
     window.addEventListener("message", onMessage);
@@ -226,18 +263,37 @@ export default function App() {
 
   useEffect(() => {
     // 自动滚动到底部
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
   useEffect(() => {
+    // 自动调整输入框高度（上限）
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${clamp(el.scrollHeight, 44, 140)}px`;
+  }, [input]);
+
+  function requestClose() {
+    abortRef.current?.abort();
+    try {
+      window.parent?.postMessage({ type: "onekey_rag_widget:close" }, parentOrigin || "*");
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setActiveCitation(null);
+      if (e.key !== "Escape") return;
+      requestClose();
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function sendFeedback(msg: ChatMessage, rating: "up" | "down", reason?: string) {
+  async function sendFeedback(msg: ChatMessage, rating: "up" | "down") {
     if (!msg.completionId) return;
     const urls = (msg.sources || []).map((s) => s.url).filter(Boolean);
     await fetchJson(apiFeedbackUrl, {
@@ -247,19 +303,34 @@ export default function App() {
         conversation_id: conversationIdRef.current,
         message_id: msg.completionId,
         rating,
-        reason: reason || "",
+        reason: "",
         comment: "",
         sources: urls,
       }),
     });
   }
 
+  async function onClear() {
+    abortRef.current?.abort();
+    setIsStreaming(false);
+    setMessages([]);
+    setErrorBanner("");
+    setCopiedMessageId(null);
+    setCopiedCodeKey(null);
+    setHighlightedSourceId(null);
+  }
+
+  async function copyMessage(msg: ChatMessage) {
+    const ok = await copyToClipboard(msg.content || "");
+    if (!ok) return;
+    setCopiedMessageId(msg.localId);
+    window.setTimeout(() => setCopiedMessageId((cur) => (cur === msg.localId ? null : cur)), 1200);
+  }
+
   async function onSend() {
+    if (isStreaming) return;
     const trimmed = input.trim();
     if (!trimmed) return;
-    if (isStreaming) {
-      abortRef.current?.abort();
-    }
 
     setErrorBanner("");
     setInput("");
@@ -326,6 +397,14 @@ export default function App() {
         },
       });
     } catch (e: any) {
+      if (controller.signal.aborted || e?.name === "AbortError") {
+        setMessages((prev) =>
+          prev.map((m) => (m.localId === assistantLocalId ? { ...m, status: "aborted" } : m))
+        );
+        setIsStreaming(false);
+        abortRef.current = null;
+        return;
+      }
       const errText = e?.message || String(e);
       setMessages((prev) =>
         prev.map((m) =>
@@ -338,47 +417,47 @@ export default function App() {
     }
   }
 
-  function onStop() {
-    abortRef.current?.abort();
+  function getSourceCardId(msgLocalId: string, ref: number) {
+    return `source-${msgLocalId}-${ref}`;
   }
 
-  function onClear() {
-    if (isStreaming) abortRef.current?.abort();
-    setMessages([]);
-    setErrorBanner("");
+  function highlightSource(id: string) {
+    setHighlightedSourceId(id);
+    window.setTimeout(() => setHighlightedSourceId((cur) => (cur === id ? null : cur)), 1600);
   }
 
-  function requestClose() {
-    try {
-      window.parent?.postMessage({ type: "onekey_rag_widget:close" }, parentOrigin || "*");
-    } catch {
-      // ignore
+  function jumpToSource(msg: ChatMessage, ref: number) {
+    const id = getSourceCardId(msg.localId, ref);
+    const el = document.getElementById(id);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      highlightSource(id);
+      return;
     }
+
+    const sources = msg.sources || [];
+    let target: SourceItem | undefined;
+    for (let i = 0; i < sources.length; i += 1) {
+      if (getSourceRef(sources[i], i) === ref) {
+        target = sources[i];
+        break;
+      }
+    }
+    if (target?.url) window.open(target.url, "_blank", "noreferrer");
   }
 
-  function renderCitationLink(href: string, children: React.ReactNode, msg: ChatMessage) {
+  function renderCitationLink(href: string, children: ReactNode, msg: ChatMessage) {
     const m = /^#cite-(\d{1,3})$/.exec(href);
     if (!m) return null;
     const ref = Number(m[1]);
-    const source = (msg.sources || []).find((s) => (s.ref ?? undefined) === ref);
+    const hasSources = !!(msg.sources && msg.sources.length > 0);
 
     return (
       <button
         type="button"
-        className="mx-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-md border border-slate-700 bg-slate-800 px-1 text-[11px] font-semibold text-slate-100 hover:bg-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        onClick={(e) => {
-          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-          setActiveCitation({ ref, x: rect.left + rect.width / 2, y: rect.bottom + 8, msgId: msg.localId });
-          setOpenSourcesFor(msg.localId);
-        }}
-        onMouseEnter={(e) => {
-          const rect = (e.currentTarget as HTMLButtonElement).getBoundingClientRect();
-          setActiveCitation({ ref, x: rect.left + rect.width / 2, y: rect.bottom + 8, msgId: msg.localId });
-        }}
-        onMouseLeave={() => {
-          // 鼠标离开不立即关闭，避免抖动；让用户能移动到弹层上
-          // 由弹层自身的 mouseleave / ESC 控制
-        }}
+        className="mx-0.5 inline-flex h-4 w-4 -translate-y-0.5 items-center justify-center rounded-[4px] border border-white/10 bg-white/5 text-[10px] font-semibold text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={!hasSources}
+        onClick={() => jumpToSource(msg, ref)}
         aria-label={`引用 ${ref}`}
       >
         {children}
@@ -386,105 +465,140 @@ export default function App() {
     );
   }
 
-  function citationPopover() {
-    if (!activeCitation) return null;
-    const msg = messages.find((m) => m.localId === activeCitation.msgId);
-    const source = msg?.sources?.find((s) => (s.ref ?? undefined) === activeCitation.ref);
+  function Avatar({ role }: { role: Role }) {
+    if (role === "user") {
+      return (
+        <div className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/5">
+          <User size={16} className="text-slate-200" />
+        </div>
+      );
+    }
+    return (
+      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-orange-400 to-rose-500">
+        <Sparkles size={16} className="text-white" />
+      </div>
+    );
+  }
 
-    const style: React.CSSProperties = {
-      position: "fixed",
-      left: activeCitation.x,
-      top: activeCitation.y,
-      transform: "translateX(-50%)",
-      zIndex: 999999,
-    };
+  function IconButton({
+    label,
+    disabled,
+    onClick,
+    children,
+  }: {
+    label: string;
+    disabled?: boolean;
+    onClick?: () => void;
+    children: ReactNode;
+  }) {
+    return (
+      <button
+        type="button"
+        className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+        aria-label={label}
+        title={label}
+        disabled={disabled}
+        onClick={onClick}
+      >
+        {children}
+      </button>
+    );
+  }
+
+  function CodeBlock({
+    inline,
+    className,
+    children,
+  }: {
+    inline?: boolean;
+    className?: string;
+    children: ReactNode;
+  }) {
+    const match = /language-(\w+)/.exec(className || "");
+    const lang = (match?.[1] || "").toLowerCase();
+    const codeText = String(children ?? "").replace(/\n$/, "");
+    const copyKey = `${lang}:${codeText.slice(0, 48)}`;
+
+    if (inline) {
+      return (
+        <code className="rounded-md border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[12px] text-slate-200">
+          {children}
+        </code>
+      );
+    }
 
     return (
-      <div
-        style={style}
-        className="w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-slate-700 bg-slate-900/95 p-3 text-sm text-slate-100 shadow-2xl backdrop-blur"
-        onMouseLeave={() => setActiveCitation(null)}
-      >
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="text-xs font-semibold text-slate-200">引用 [{activeCitation.ref}]</div>
+      <div className="my-3 overflow-hidden rounded-2xl border border-white/10 bg-black/30">
+        <div className="flex items-center justify-between border-b border-white/10 px-3 py-2">
+          <div className="rounded-md bg-white/5 px-2 py-0.5 font-mono text-[11px] uppercase text-slate-300">
+            {lang || "text"}
+          </div>
           <button
             type="button"
-            className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 hover:bg-slate-700"
-            onClick={() => setActiveCitation(null)}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+            aria-label="复制代码"
+            title="复制代码"
+            onClick={() => {
+              copyToClipboard(codeText).then((ok) => {
+                if (!ok) return;
+                setCopiedCodeKey(copyKey);
+                window.setTimeout(() => setCopiedCodeKey((cur) => (cur === copyKey ? null : cur)), 1200);
+              });
+            }}
           >
-            关闭
+            {copiedCodeKey === copyKey ? <Check size={16} /> : <Copy size={16} />}
           </button>
         </div>
-        {source ? (
-          <>
-            <div className="truncate text-xs font-semibold text-slate-100" title={source.title || source.url}>
-              {source.title || source.section_path || source.url}
-            </div>
-            {source.snippet ? <div className="mt-2 text-xs text-slate-300">{source.snippet}</div> : null}
-            <div className="mt-2">
-              <a
-                className="text-xs font-medium text-blue-300 underline"
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                打开来源
-              </a>
-            </div>
-          </>
-        ) : (
-          <div className="text-xs text-slate-300">来源尚未返回（流式结束前会下发 sources）。</div>
-        )}
+        <SyntaxHighlighter
+          language={lang}
+          style={vscDarkPlus}
+          customStyle={{
+            margin: 0,
+            background: "transparent",
+            padding: "14px 14px",
+            fontSize: "12px",
+            lineHeight: "1.6",
+          }}
+          codeTagProps={{
+            style: {
+              fontFamily:
+                'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            },
+          }}
+        >
+          {codeText}
+        </SyntaxHighlighter>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen w-full flex-col bg-transparent text-slate-100">
-      {citationPopover()}
-
-      <div className="flex items-center gap-3 border-b border-white/10 bg-slate-900/30 px-4 py-3 backdrop-blur">
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{title}</div>
-          {pageUrl ? <div className="truncate text-xs text-slate-400">{pageUrl}</div> : null}
-        </div>
-        <select
-          className="h-9 max-w-[220px] rounded-md border border-white/10 bg-slate-900/60 px-2 text-sm text-slate-100"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={isStreaming}
-          aria-label="选择模型"
+    <div className="relative flex h-screen w-full flex-col bg-transparent text-slate-100">
+      <div className="flex items-center justify-between border-b border-white/10 px-5 py-4">
+        <div className="text-sm font-semibold text-white">Ask AI</div>
+        <button
+          type="button"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+          aria-label="关闭"
+          title="关闭"
+          onClick={requestClose}
         >
-          {(models.length ? models : [initialModel]).map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-        <Button variant="ghost" onClick={onClear} disabled={isStreaming} title="清空会话">
-          清空
-        </Button>
-        <Button variant="ghost" onClick={requestClose} title="关闭">
-          关闭
-        </Button>
+          <X size={18} />
+        </button>
       </div>
 
-      {errorBanner ? (
-        <div className="border-b border-white/10 bg-red-500/10 px-4 py-2 text-xs text-red-200">{errorBanner}</div>
-      ) : (
-        <div className="border-b border-white/10 bg-white/5 px-4 py-2 text-xs text-slate-300">
-          本助手回答基于 OneKey 开发者文档内容生成；请以引用链接为准。
-        </div>
-      )}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-5">
+        {errorBanner ? (
+          <div className="mb-4 rounded-2xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-200">
+            {errorBanner}
+          </div>
+        ) : null}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-4 text-sm text-slate-200 backdrop-blur">
-            <div className="text-base font-semibold">Hi!</div>
-            <div className="mt-2 text-sm text-slate-300">
-              我是 OneKey 文档助手，可以帮你查找 SDK/API/集成指南并给出可追溯引用。
-            </div>
-            <div className="mt-4 text-xs font-semibold text-slate-300">示例问题</div>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="text-base font-semibold text-white">Hi!</div>
+            <div className="mt-2 text-sm text-slate-300">我会基于 OneKey 开发者文档回答你的问题，并给出可追溯的来源引用。</div>
+            <div className="mt-5 text-xs font-semibold text-slate-300">示例问题</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {[
                 "如何在项目里集成 OneKey Connect？",
@@ -494,158 +608,183 @@ export default function App() {
                 <button
                   key={q}
                   type="button"
-                  className="rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2 text-xs text-slate-200 hover:bg-slate-900/60"
-                  onClick={() => setInput(q)}
+                  className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10"
+                  onClick={() => {
+                    setInput(q);
+                    textareaRef.current?.focus();
+                  }}
                 >
                   {q}
                 </button>
               ))}
             </div>
           </div>
-        ) : null}
-
-        <div className="mt-4 space-y-4">
-          {messages.map((m) => (
-            <div key={m.localId} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
-              <div
-                className={[
-                  "max-w-[92%] rounded-2xl px-4 py-3 text-sm shadow-sm",
-                  m.role === "user"
-                    ? "bg-gradient-to-br from-blue-600 to-indigo-600 text-white"
-                    : "border border-white/10 bg-slate-900/30 text-slate-100 backdrop-blur",
-                ].join(" ")}
-              >
-                {m.role === "assistant" ? (
-                  <div className="prose prose-invert max-w-none prose-pre:overflow-x-auto prose-pre:rounded-xl prose-pre:bg-black/40 prose-pre:text-slate-100">
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ href, children, ...rest }) => {
-                          const hrefStr = typeof href === "string" ? href : "";
-                          const maybeCitation = hrefStr.startsWith("#cite-")
-                            ? renderCitationLink(hrefStr, children, m)
-                            : null;
-                          if (maybeCitation) return maybeCitation;
-                          return (
-                            <a
-                              href={href}
-                              target={hrefStr.startsWith("#") ? undefined : "_blank"}
-                              rel={hrefStr.startsWith("#") ? undefined : "noreferrer"}
-                              className="underline decoration-white/30 underline-offset-4 hover:decoration-white/60"
-                              {...rest}
-                            >
-                              {children}
-                            </a>
-                          );
-                        },
-                      }}
-                    >
-                      {linkCitationsForMarkdown(m.content)}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="whitespace-pre-wrap">{m.content}</div>
-                )}
-
-                {m.role === "assistant" && m.status === "error" ? (
-                  <div className="mt-2 text-xs text-red-200">生成失败：{m.errorText}</div>
-                ) : null}
-
-                {m.role === "assistant" && (m.sources?.length || 0) > 0 ? (
-                  <div className="mt-3">
-                    <button
-                      type="button"
-                      className="rounded-lg border border-white/10 bg-slate-900/40 px-2 py-1 text-xs text-slate-200 hover:bg-slate-900/60"
-                      onClick={() => setOpenSourcesFor((cur) => (cur === m.localId ? null : m.localId))}
-                    >
-                      来源（{m.sources?.length || 0}）
-                    </button>
-                    {openSourcesFor === m.localId ? (
-                      <div className="mt-2 space-y-2">
-                        {(m.sources || []).map((s) => {
-                          const ref = s.ref ?? undefined;
-                          return (
-                            <div
-                              key={`${ref || "x"}:${s.url}`}
-                              className="rounded-xl border border-white/10 bg-black/20 p-3"
-                            >
-                              <div className="flex items-start gap-2">
-                                <div className="mt-0.5 min-w-[28px] text-xs font-semibold text-slate-200">
-                                  {ref ? `[${ref}]` : ""}
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <a
-                                    href={s.url}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="block truncate text-xs font-semibold text-slate-100 underline decoration-white/20 underline-offset-4 hover:decoration-white/50"
-                                    title={s.url}
-                                  >
-                                    {s.title || s.section_path || s.url}
-                                  </a>
-                                  {s.snippet ? <div className="mt-1 text-xs text-slate-300">{s.snippet}</div> : null}
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        })}
+        ) : (
+          <div className="divide-y divide-white/10">
+            {messages.map((m) => (
+              <div key={m.localId} className="py-5">
+                <div className="flex gap-3">
+                  <Avatar role={m.role} />
+                  <div className="min-w-0 flex-1">
+                    {m.role === "user" ? (
+                      <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-100">{m.content}</div>
+                    ) : (
+                      <div className="prose prose-invert max-w-none text-sm prose-a:font-medium prose-a:text-blue-300 hover:prose-a:text-blue-200">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            a: ({ href, children, ...rest }) => {
+                              const hrefStr = typeof href === "string" ? href : "";
+                              const maybeCitation = hrefStr.startsWith("#cite-") ? renderCitationLink(hrefStr, children, m) : null;
+                              if (maybeCitation) return maybeCitation;
+                              return (
+                                <a
+                                  href={href}
+                                  target={hrefStr.startsWith("#") ? undefined : "_blank"}
+                                  rel={hrefStr.startsWith("#") ? undefined : "noreferrer"}
+                                  className="underline decoration-white/20 underline-offset-4 hover:decoration-white/40"
+                                  {...rest}
+                                >
+                                  {children}
+                                </a>
+                              );
+                            },
+                            code: ({ inline, className, children }) => (
+                              <CodeBlock inline={inline} className={className}>
+                                {children}
+                              </CodeBlock>
+                            ),
+                          }}
+                        >
+                          {linkCitationsForMarkdown(m.content)}
+                        </ReactMarkdown>
                       </div>
-                    ) : null}
-                  </div>
-                ) : null}
+                    )}
 
-                {m.role === "assistant" && m.status === "done" ? (
-                  <div className="mt-3 flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => sendFeedback(m, "up").catch(() => {})}
-                      disabled={!m.completionId}
-                    >
-                      有帮助
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => sendFeedback(m, "down", "sources_irrelevant").catch(() => {})}
-                      disabled={!m.completionId}
-                    >
-                      没帮助
-                    </Button>
+                      {m.role === "assistant" && m.status === "streaming" && !m.content ? (
+                        <div className="mt-2 text-xs text-slate-400">正在生成…</div>
+                      ) : null}
+
+                      {m.role === "assistant" && m.status === "error" ? (
+                        <div className="mt-2 text-xs text-red-200">生成失败：{m.errorText}</div>
+                      ) : null}
+
+                      {m.role === "assistant" && m.sources && m.sources.length > 0 ? (
+                        <div className="mt-4">
+                          <div className="text-xs font-semibold text-slate-300">Sources</div>
+                          <div className="mt-2 grid gap-2">
+                            {m.sources.map((s, idx) => {
+                              const ref = getSourceRef(s, idx);
+                              const id = getSourceCardId(m.localId, ref);
+                              const { host, path } = parseUrl(s.url);
+                              const label = (s.title || s.section_path || path || s.url || "").trim();
+                              return (
+                                <a
+                                  key={id}
+                                  id={id}
+                                  href={s.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={[
+                                    "group flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-200 hover:bg-white/10",
+                                    highlightedSourceId === id ? "ring-2 ring-blue-500/40" : "",
+                                  ].join(" ")}
+                                >
+                                  <div className="flex min-w-0 items-center gap-3">
+                                    <div className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/10 bg-black/30 text-[11px] font-semibold text-slate-100">
+                                      {ref}
+                                    </div>
+                                    <div className="min-w-0">
+                                      <div className="truncate text-xs font-medium text-slate-100">{label}</div>
+                                      <div className="truncate text-[11px] text-slate-400">{host ? `${host}${path}` : path}</div>
+                                    </div>
+                                  </div>
+                                  <ExternalLink size={14} className="shrink-0 text-slate-400 group-hover:text-slate-200" />
+                                </a>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {m.role === "assistant" && m.status === "done" ? (
+                        <div className="mt-3 flex items-center justify-end gap-2">
+                          <IconButton
+                            label={copiedMessageId === m.localId ? "已复制" : "复制"}
+                            onClick={() => copyMessage(m).catch(() => {})}
+                          >
+                            {copiedMessageId === m.localId ? <Check size={16} /> : <Copy size={16} />}
+                          </IconButton>
+                          <IconButton label="有帮助" disabled={!m.completionId} onClick={() => sendFeedback(m, "up").catch(() => {})}>
+                            <ThumbsUp size={16} />
+                          </IconButton>
+                          <IconButton
+                            label="没帮助"
+                            disabled={!m.completionId}
+                            onClick={() => sendFeedback(m, "down").catch(() => {})}
+                          >
+                            <ThumbsDown size={16} />
+                          </IconButton>
+                        </div>
+                      ) : null}
                   </div>
-                ) : null}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      <div className="border-t border-white/10 bg-slate-900/30 px-4 py-4 backdrop-blur">
-        <div className="flex items-end gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="输入你的问题（回车发送，Shift+Enter 换行）"
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                onSend().catch(() => {});
-              }
-            }}
-            disabled={isStreaming}
-            className="bg-slate-900/50 text-slate-100 placeholder:text-slate-500 border-white/10 focus:ring-blue-500"
-          />
-          <div className="flex flex-col gap-2">
-            <Button onClick={() => onSend().catch(() => {})} disabled={isStreaming || !input.trim()}>
-              发送
-            </Button>
-            <Button variant="outline" onClick={onStop} disabled={!isStreaming}>
-              停止
-            </Button>
+      <div className="border-t border-white/10 px-5 py-4">
+        <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="输入你的问题（回车发送，Shift+Enter 换行）"
+              className="min-h-[44px] flex-1 resize-none bg-transparent px-1 py-2 text-sm leading-relaxed text-slate-100 outline-none placeholder:text-slate-500"
+              rows={1}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  onSend().catch(() => {});
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/10 text-slate-100 hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+              aria-label="发送"
+              title="发送"
+              disabled={isStreaming || !input.trim()}
+              onClick={() => onSend().catch(() => {})}
+            >
+              <SendHorizonal size={18} />
+            </button>
           </div>
         </div>
-        <div className="mt-2 text-xs text-slate-400">
-          引用编号如 <span className="font-mono">[1]</span> 会以内联形式出现，可悬浮/点击查看来源片段与链接。
+
+        <div className="mt-3 flex items-center justify-between text-xs text-slate-400">
+          <div className="flex items-center gap-2">
+            <span>Powered by</span>
+            <a className="font-semibold text-slate-200 hover:text-white" href="https://onekey.so" target="_blank" rel="noreferrer">
+              OneKey
+            </a>
+          </div>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              className="text-slate-300 hover:text-white disabled:opacity-40"
+              onClick={() => onClear().catch(() => {})}
+              disabled={messages.length === 0}
+            >
+              Clear
+            </button>
+            <a className="text-slate-300 hover:text-white" href={contactUrl} target="_blank" rel="noreferrer">
+              Contact us
+            </a>
+          </div>
         </div>
       </div>
     </div>

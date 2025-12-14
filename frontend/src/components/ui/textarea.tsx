@@ -12,7 +12,6 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(({ 
         "min-h-[44px] w-full resize-none rounded-md border border-white/10 bg-slate-900/30 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60",
         className
       )}
-      rows={3}
       {...props}
     />
   );

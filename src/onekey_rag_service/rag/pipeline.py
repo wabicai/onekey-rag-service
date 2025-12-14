@@ -242,10 +242,19 @@ async def prepare_rag(
             "- 不要在正文里堆砌 URL；只用 [n] 这种 inline citation。\n\n"
         )
 
+    formatting_rules = (
+        "格式要求（重要）：\n"
+        "- 请使用 Markdown 输出。\n"
+        "- 对变量名/方法名/参数名/字段名/命令/路径/报错关键词等“短代码片段”，使用反引号包裹（inline code），例如 `connectId`、`HardwareSDK.init()`。\n"
+        "- 对多行代码/命令/配置使用代码块（fenced code block），并尽量标注语言，例如 ```ts / ```bash / ```json。\n"
+        "- 除代码块外，不要把短标识符单独换行。\n\n"
+    )
+
     user = (
         f"{extra}"
         f"当前问题：{question}\n\n"
         f"文档片段（可引用）：\n{context}\n\n"
+        f"{formatting_rules}"
         f"{citation_rules}"
         "请用中文给出：\n"
         "1) 简要结论（1-3 句）\n"
@@ -317,8 +326,8 @@ async def answer_with_rag(
     if not chat:
         # 降级：无上游模型时，返回可用片段的摘要式回答（确保服务可运行）
         answer = (
-            "当前服务未配置上游 ChatModel（CHAT_API_KEY），因此无法生成高质量自然语言回答。\n\n"
-            "下面是检索到的相关文档片段（请优先查看来源链接）：\n"
+            "当前服务暂时没有搜索到可用信息。\n\n"
+            "下面是检索到的可能的相关文档片段（请优先查看来源链接）：\n"
             + "\n".join([f"- {s['title'] or s['url']}（{s['url']}）" for s in sources[:5]])
         )
         return RagAnswer(answer=answer, sources=sources, debug=prepared.debug)

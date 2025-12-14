@@ -28,8 +28,9 @@
   var apiBase = dataset.apiBase || globalConfig.apiBase || ""; // 为空表示 iframe 内走同域相对路径
 
   var model = dataset.model || globalConfig.model || "onekey-docs";
-  var title = dataset.title || globalConfig.title || "OneKey 文档助手";
+  var title = dataset.title || globalConfig.title || "Ask AI";
   var buttonLabel = dataset.buttonLabel || globalConfig.buttonLabel || "Ask AI";
+  var contactUrl = dataset.contactUrl || globalConfig.contactUrl || "";
 
   var zIndex = parseInt(dataset.zIndex || globalConfig.zIndex || "2147483647", 10);
   // 兼容旧配置：data-width 之前用于侧边栏宽度，这里作为 modalWidth 的默认值
@@ -62,10 +63,6 @@
     ";background:rgba(17,24,39,.96);border:1px solid rgba(255,255,255,.12);border-radius:16px;box-shadow:0 26px 80px rgba(0,0,0,.52);opacity:0;pointer-events:none;transition:opacity .18s ease, transform .18s ease;overflow:hidden;}" +
     "#onekey-rag-widget-overlay[data-open='true']{opacity:1;pointer-events:auto}" +
     "#onekey-rag-widget-modal[data-open='true']{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}" +
-    "#onekey-rag-widget-close{position:absolute;top:10px;right:10px;z-index:" +
-    (zIndex + 2) +
-    ";width:34px;height:34px;border-radius:10px;border:1px solid rgba(255,255,255,.16);background:rgba(15,23,42,.65);color:#fff;cursor:pointer;font:700 16px/1 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;backdrop-filter: blur(10px);}" +
-    "#onekey-rag-widget-close:hover{background:rgba(15,23,42,.85)}" +
     "#onekey-rag-widget-iframe{border:0;width:100%;height:100%;background:transparent;}" +
     "@media (max-width: 640px){#onekey-rag-widget-modal{width:calc(100vw - 16px);height:calc(100vh - 16px);max-height:calc(100vh - 16px);border-radius:14px}}";
   document.head.appendChild(style);
@@ -90,19 +87,12 @@
   modal.setAttribute("role", "dialog");
   modal.setAttribute("aria-modal", "true");
 
-  var closeBtn = document.createElement("button");
-  closeBtn.id = "onekey-rag-widget-close";
-  closeBtn.type = "button";
-  closeBtn.setAttribute("aria-label", "关闭文档助手");
-  closeBtn.textContent = "×";
-
   var iframe = document.createElement("iframe");
   iframe.id = "onekey-rag-widget-iframe";
   iframe.title = title;
   iframe.loading = "lazy";
   iframe.referrerPolicy = "strict-origin-when-cross-origin";
 
-  modal.appendChild(closeBtn);
   modal.appendChild(iframe);
   container.appendChild(button);
   container.appendChild(overlay);
@@ -118,6 +108,7 @@
     url.searchParams.set("title", title);
     url.searchParams.set("parent_origin", window.location.origin);
     if (apiBase) url.searchParams.set("api_base", apiBase);
+    if (contactUrl) url.searchParams.set("contact_url", contactUrl);
     return url.toString();
   }
 
@@ -158,13 +149,17 @@
     opened = false;
     overlay.setAttribute("data-open", "false");
     modal.setAttribute("data-open", "false");
+    try {
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({ type: "onekey_rag_widget:host_closed" }, widgetOrigin);
+      }
+    } catch (e) {
+      // ignore
+    }
   }
 
   button.addEventListener("click", function () {
     open();
-  });
-  closeBtn.addEventListener("click", function () {
-    close();
   });
   overlay.addEventListener("click", function () {
     close();
