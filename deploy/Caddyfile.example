@@ -1,0 +1,17 @@
+
+
+{
+  email 2865679431qq@gmail.com
+}
+
+exwxyzi.cn {
+  encode zstd gzip
+
+  // 替换你的信息
+  @admin path /admin/*
+  basicauth @admin {
+    xxx xxxxxxxxxx
+  }
+
+  reverse_proxy api:8000
+}

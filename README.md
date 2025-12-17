@@ -23,30 +23,34 @@
    - 后台任务：默认启用 `worker`（见 `JOBS_BACKEND`），抓取/索引会入队由 Worker 消费
 
 3. 初始化数据：抓取 + 建索引（首次建议 `full`，后续可用 `incremental`）
-   - 抓取文档（sitemap 优先，失败自动降级为 seed_urls）：
-     - `POST http://localhost:8000/admin/crawl`
-     - 示例（全站建议把 `max_pages` 调大，例如 5000 或更高）：
+   - 先用 Admin 账号登录拿 JWT（账号密码来自 `.env` 的 `ADMIN_USERNAME/ADMIN_PASSWORD`）：
+     - `POST http://localhost:8000/admin/api/auth/login`
+   - 触发抓取（默认工作区/默认 KB/默认数据源分别为 `default`/`default`/`source_default`）：
+     - `POST http://localhost:8000/admin/api/workspaces/default/jobs/crawl`
+     - 示例（全站建议把 `max_pages` 调大，例如 5000 或更高；也可直接改 `.env` 的 `CRAWL_*`）：
        ```bash
-       curl -s http://localhost:8000/admin/crawl \
+       # 1) 登录拿 token（把响应里的 access_token 复制出来）
+       curl -s http://localhost:8000/admin/api/auth/login \
          -H 'content-type: application/json' \
-         -d '{"mode":"full","sitemap_url":"https://developer.onekey.so/sitemap.xml","seed_urls":["https://developer.onekey.so/"],"max_pages":5000}'
+         -d '{"username":"admin","password":"<你的 ADMIN_PASSWORD>"}'
+
+       # 2) 触发 crawl（把 <token> 替换为上一步的 access_token）
+       curl -s http://localhost:8000/admin/api/workspaces/default/jobs/crawl \
+         -H 'content-type: application/json' \
+         -H "Authorization: Bearer <token>" \
+         -d '{"kb_id":"default","source_id":"source_default","mode":"full","sitemap_url":"https://developer.onekey.so/sitemap.xml","seed_urls":["https://developer.onekey.so/"],"max_pages":5000}'
        ```
-     - 轮询任务状态：
-       ```bash
-       curl -s http://localhost:8000/admin/crawl/<job_id>
-       ```
-   - 建索引（chunk + embedding + pgvector 入库）：
-     - `POST http://localhost:8000/admin/index`
+   - 触发建索引（chunk + embedding + pgvector 入库）：
+     - `POST http://localhost:8000/admin/api/workspaces/default/jobs/index`
      - 示例：
        ```bash
-       curl -s http://localhost:8000/admin/index \
+       curl -s http://localhost:8000/admin/api/workspaces/default/jobs/index \
          -H 'content-type: application/json' \
-         -d '{"mode":"full"}'
+         -H "Authorization: Bearer <token>" \
+         -d '{"kb_id":"default","mode":"full"}'
        ```
-     - 轮询任务状态：
-       ```bash
-       curl -s http://localhost:8000/admin/index/<job_id>
-       ```
+   - 轮询任务状态（crawl/index 共用）：
+     - `GET http://localhost:8000/admin/api/workspaces/default/jobs/<job_id>`
    - 说明：当 `JOBS_BACKEND=worker` 时，任务会先进入 `queued`，随后由 Worker 拉起为 `running` 并最终 `succeeded/failed`
 
 4. 对话（OpenAI 兼容）：
@@ -69,6 +73,19 @@
    - 反馈：`POST http://localhost:8000/v1/feedback`
    - 健康检查：`GET http://localhost:8000/healthz`
    - 前端 Widget（用于“一行 script”接入）：`GET http://localhost:8000/widget/widget.js`（iframe 页面为 `GET http://localhost:8000/widget/`）
+   - 后台 Admin UI：`http://localhost:8000/admin/ui/#/login`（使用 JWT 登录，接口为 `/admin/api/*`）
+
+## 后台管理（Admin）
+
+本仓库内置一个轻量后台（面向企业化演进，多 RagApp/多 KB）：
+
+- Admin UI：`/admin/ui/#/login`
+- Admin API：`/admin/api/*`（Bearer JWT）
+
+配置（见 `.env.example`）：
+
+- `ADMIN_USERNAME`、`ADMIN_PASSWORD`
+- `ADMIN_JWT_SECRET`、`ADMIN_JWT_EXPIRES_S`
 
 ## 前端 Widget（一行 script 接入）
 

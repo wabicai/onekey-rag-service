@@ -4,6 +4,7 @@ import logging
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from onekey_rag_service.config import Settings
@@ -32,6 +33,135 @@ def ensure_indexes(engine: Engine, settings: Settings) -> None:
     _ensure_pgvector_index(engine, settings)
     _ensure_fts_index(engine, settings)
 
+
+def _is_safe_ident(name: str) -> bool:
+    # 仅用于拼接 SQL 标识符，避免注入风险
+    return bool(name) and all(ch.isalnum() or ch == "_" for ch in name)
+
+
+def ensure_admin_orphan_types(engine: Engine, *, schema: str = "public") -> None:
+    """
+    兼容“异常中断/并发启动”场景：
+
+    Postgres 在创建表时会同时创建同名复合类型（pg_type）。当进程在建表中途异常退出或并发启动时，
+    可能出现“表不存在，但同名类型残留”的状态，导致后续 `CREATE TABLE` 报：
+    `duplicate key value violates unique constraint pg_type_typname_nsp_index`。
+
+    本函数会在“表不存在 + 类型是孤儿复合类型”时清理该类型，保证启动幂等。
+    """
+
+    if not _is_safe_ident(schema):
+        raise ValueError("schema 名称不安全")
+
+    table_names = ["workspaces", "knowledge_bases", "data_sources", "rag_apps", "app_kbs", "retrieval_events"]
+    for t in table_names:
+        if not _is_safe_ident(t):
+            raise ValueError("表名不安全")
+
+    with engine.begin() as conn:
+        for t in table_names:
+            try:
+                rel = conn.execute(text("SELECT to_regclass(:name)"), {"name": f"{schema}.{t}"}).scalar()
+            except Exception as e:
+                logger.warning("检查表是否存在失败 table=%s.%s err=%s", schema, t, e)
+                continue
+            if rel:
+                continue
+
+            row = conn.execute(
+                text(
+                    """
+                    SELECT t.typtype, c.oid
+                    FROM pg_type t
+                    JOIN pg_namespace n ON n.oid = t.typnamespace
+                    LEFT JOIN pg_class c ON c.oid = t.typrelid
+                    WHERE n.nspname = :schema
+                      AND t.typname = :typname
+                    LIMIT 1
+                    """
+                ),
+                {"schema": schema, "typname": t},
+            ).first()
+            if not row:
+                continue
+
+            typtype = str(row[0] or "")
+            rel_oid = row[1]
+            if typtype != "c" or rel_oid is not None:
+                continue
+
+            try:
+                conn.execute(text(f"DROP TYPE IF EXISTS {schema}.{t} CASCADE"))
+                logger.warning("已清理孤儿复合类型：%s.%s", schema, t)
+            except Exception as e:
+                logger.warning("清理孤儿类型失败 type=%s.%s err=%s", schema, t, e)
+
+
+def create_all_safe(engine: Engine, metadata) -> None:
+    """
+    `metadata.create_all` 的安全包装：
+    - 先清理可能残留的孤儿类型（见 ensure_admin_orphan_types）
+    - 遇到 pg_type 唯一约束冲突时，清理后重试一次
+    """
+
+    ensure_admin_orphan_types(engine)
+    try:
+        metadata.create_all(engine)
+        return
+    except IntegrityError as e:
+        if "pg_type_typname_nsp_index" not in str(e):
+            raise
+
+    # 并发/异常中断时可能出现 catalog 竞争：清理后重试一次
+    ensure_admin_orphan_types(engine)
+    metadata.create_all(engine)
+
+
+def ensure_admin_schema(engine: Engine) -> None:
+    """
+    轻量级“迁移”：在不引入 Alembic 的前提下，为历史库补齐 Admin 所需字段与索引。
+
+    约束：
+    - 只做“加字段/加索引”，不做破坏性变更（不删列、不改约束）。
+    - 使用 IF NOT EXISTS，保证多次启动幂等。
+    """
+
+    with engine.begin() as conn:
+        # pages：workspace/kb/source 维度（当前阶段以 workspace 为隔离边界）
+        try:
+            conn.execute(text("ALTER TABLE pages ADD COLUMN IF NOT EXISTS workspace_id varchar(64) NOT NULL DEFAULT 'default'"))
+            conn.execute(text("ALTER TABLE pages ADD COLUMN IF NOT EXISTS kb_id varchar(64) NOT NULL DEFAULT 'default'"))
+            conn.execute(text("ALTER TABLE pages ADD COLUMN IF NOT EXISTS source_id varchar(64) NOT NULL DEFAULT ''"))
+
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pages_workspace_id ON pages (workspace_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pages_kb_id ON pages (kb_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_pages_source_id ON pages (source_id)"))
+        except Exception as e:
+            logger.warning("确保 pages 多租户字段失败：%s", e)
+
+        # jobs：增加 scope 字段用于筛选与审计
+        try:
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS workspace_id varchar(64) NOT NULL DEFAULT 'default'"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS kb_id varchar(64) NOT NULL DEFAULT 'default'"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS app_id varchar(64) NOT NULL DEFAULT ''"))
+            conn.execute(text("ALTER TABLE jobs ADD COLUMN IF NOT EXISTS source_id varchar(64) NOT NULL DEFAULT ''"))
+            # 若历史库已存在列，确保默认值符合当前约定
+            conn.execute(text("ALTER TABLE jobs ALTER COLUMN kb_id SET DEFAULT 'default'"))
+
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_jobs_workspace_id ON jobs (workspace_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_jobs_type_status ON jobs (type, status)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_jobs_kb_id ON jobs (kb_id)"))
+        except Exception as e:
+            logger.warning("确保 jobs 多租户字段失败：%s", e)
+
+        # feedback：增加 workspace/app 维度
+        try:
+            conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS workspace_id varchar(64) NOT NULL DEFAULT 'default'"))
+            conn.execute(text("ALTER TABLE feedback ADD COLUMN IF NOT EXISTS app_id varchar(64) NOT NULL DEFAULT ''"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_feedback_workspace_id ON feedback (workspace_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_feedback_app_id ON feedback (app_id)"))
+        except Exception as e:
+            logger.warning("确保 feedback 多租户字段失败：%s", e)
 
 def _ensure_embedding_dimension(engine: Engine, settings: Settings) -> None:
     """

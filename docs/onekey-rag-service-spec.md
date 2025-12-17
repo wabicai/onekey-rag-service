@@ -111,14 +111,14 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为了
 启动步骤（详见 `README.md`）：
 1) `cp .env.example .env` 并填写 `CHAT_API_KEY` 等配置  
 2) `docker compose up -d --build`  
-3) 初始化数据：`POST /admin/crawl` + `POST /admin/index`  
+3) 初始化数据：登录拿 JWT → 触发 crawl/index Job（`/admin/api/*`）  
 4) 前端接入：在文档站引入 `https://你的-rag-域名/widget/widget.js`
 
 ### 9.2 前端工程（同仓库，构建到后端静态目录）
 
 前端源码位于 `frontend/`，在构建 `api` 镜像时会：
 - 执行 `npm install && npm run build`
-- 将 `frontend/dist` 拷贝到后端静态目录 `src/onekey_rag_service/static/widget`
+- 将 `frontend/dist` 拷贝到后端静态目录 `onekey_rag_service/static/widget`
 - 由后端同域提供 `/widget/*`
 
 ## 4. 数据流与链路（端到端）
@@ -282,11 +282,17 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为了
 ---
 
 ### 6.3 文档抓取（管理接口）
-#### `POST /admin/crawl`
-- 用途：创建抓取任务（全量/增量）
+#### `POST /admin/api/auth/login`
+- 用途：获取 Admin JWT（环境变量单超管账号）
+
+#### `POST /admin/api/workspaces/{workspace_id}/jobs/crawl`
+- 用途：创建抓取任务（全量/增量），由 worker 消费执行（或在 `JOBS_BACKEND=inline` 时同步执行）
+- 请求头：`Authorization: Bearer <token>`
 - 请求体：
 ```json
 {
+  "kb_id": "default",
+  "source_id": "source_default",
   "mode": "full",
   "sitemap_url": "https://developer.onekey.so/sitemap.xml",
   "seed_urls": ["https://developer.onekey.so/"],
@@ -295,47 +301,30 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为了
   "max_pages": 5000
 }
 ```
+- 说明：
+  - `sitemap_url/seed_urls/include_patterns/exclude_patterns/max_pages` 可选：用于覆盖数据源（DataSource.config）中的默认抓取配置
 - 响应：
 ```json
-{ "job_id": "crawl_2025-12-14_000001" }
+{ "job_id": "crawl_xxxxxxxxxxxx" }
 ```
 
-#### `GET /admin/crawl/{job_id}`
-- 响应（示例）：
-```json
-{
-  "job_id": "crawl_2025-12-14_000001",
-  "status": "running",
-  "progress": { "discovered": 1200, "fetched": 800, "succeeded": 760, "failed": 40 },
-  "started_at": "2025-12-14T05:00:00Z",
-  "updated_at": "2025-12-14T05:10:00Z"
-}
-```
+#### `GET /admin/api/workspaces/{workspace_id}/jobs/{job_id}`
+- 用途：查询任务状态（crawl/index 共用）
+- 请求头：`Authorization: Bearer <token>`
 
 ---
 
 ### 6.4 建索引（管理接口）
-#### `POST /admin/index`
+#### `POST /admin/api/workspaces/{workspace_id}/jobs/index`
 - 用途：对已抓取的页面执行抽取/分块/embedding/入库
+- 请求头：`Authorization: Bearer <token>`
 - 请求体：
 ```json
-{ "mode": "incremental" }
+{ "kb_id": "default", "mode": "incremental" }
 ```
 - 响应：
 ```json
-{ "job_id": "index_2025-12-14_000001" }
-```
-
-#### `GET /admin/index/{job_id}`
-- 响应（示例）：
-```json
-{
-  "job_id": "index_2025-12-14_000001",
-  "status": "succeeded",
-  "progress": { "pages": 760, "chunks": 8200, "embedded": 8200, "upserted": 8200 },
-  "started_at": "2025-12-14T05:11:00Z",
-  "finished_at": "2025-12-14T05:18:00Z"
-}
+{ "job_id": "index_xxxxxxxxxxxx" }
 ```
 
 ---

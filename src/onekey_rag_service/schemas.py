@@ -10,30 +10,6 @@ class HealthResponse(BaseModel):
     dependencies: dict[str, str]
 
 
-class AdminCrawlRequest(BaseModel):
-    mode: Literal["full", "incremental"] = "full"
-    sitemap_url: str | None = None
-    seed_urls: list[str] | None = None
-    include_patterns: list[str] | None = None
-    exclude_patterns: list[str] | None = None
-    max_pages: int | None = None
-
-
-class AdminJobResponse(BaseModel):
-    job_id: str
-
-
-class AdminJobStatusResponse(BaseModel):
-    job_id: str
-    status: str
-    progress: dict[str, Any] = Field(default_factory=dict)
-    error: str = ""
-
-
-class AdminIndexRequest(BaseModel):
-    mode: Literal["full", "incremental"] = "incremental"
-
-
 class OpenAIChatMessage(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: str

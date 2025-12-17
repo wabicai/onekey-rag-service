@@ -22,6 +22,8 @@ def similarity_search(
     session: Session,
     *,
     query_embedding: list[float],
+    workspace_id: str | None = None,
+    kb_id: str | None = None,
     k: int = 30,
 ) -> list[RetrievedChunk]:
     distance = Chunk.embedding.cosine_distance(query_embedding)
@@ -36,9 +38,12 @@ def similarity_search(
         )
         .join(Page, Page.id == Chunk.page_id)
         .where(Chunk.embedding.is_not(None))
-        .order_by(distance.asc())
-        .limit(k)
     )
+    if workspace_id:
+        stmt = stmt.where(Page.workspace_id == workspace_id)
+    if kb_id:
+        stmt = stmt.where(Page.kb_id == kb_id)
+    stmt = stmt.order_by(distance.asc()).limit(k)
 
     rows = session.execute(stmt).all()
     return [
@@ -58,6 +63,8 @@ def bm25_search(
     session: Session,
     *,
     query: str,
+    workspace_id: str | None = None,
+    kb_id: str | None = None,
     k: int = 30,
     fts_config: str = "simple",
 ) -> list[RetrievedChunk]:
@@ -71,6 +78,15 @@ def bm25_search(
     # MVP：用 Postgres FTS 的 ts_rank_cd 近似 BM25/TF-IDF 排序（无需额外依赖）。
     # 注意：fts_config 与索引表达式必须一致才能命中 GIN 索引。
     # 说明：为了让 Postgres 命中表达式 GIN 索引，fts config 需要是常量字符串（不能是 bind param）。
+    extra_where = ""
+    params: dict[str, object] = {"q": query, "k": k}
+    if workspace_id:
+        extra_where += " AND p.workspace_id = :ws"
+        params["ws"] = workspace_id
+    if kb_id:
+        extra_where += " AND p.kb_id = :kb"
+        params["kb"] = kb_id
+
     stmt = text(
         f"""
         WITH q AS (
@@ -88,13 +104,14 @@ def bm25_search(
         JOIN q ON TRUE
         WHERE c.chunk_text <> ''
           AND to_tsvector('{cfg}', c.chunk_text) @@ q.query
+          {extra_where}
         ORDER BY score DESC
         LIMIT :k
         """
     )
 
     try:
-        rows = session.execute(stmt, {"q": query, "k": k}).all()
+        rows = session.execute(stmt, params).all()
     except Exception:
         return []
     return [
@@ -115,6 +132,8 @@ def hybrid_search(
     *,
     query_text: str,
     query_embedding: list[float],
+    workspace_id: str | None = None,
+    kb_id: str | None = None,
     k: int,
     vector_k: int,
     bm25_k: int,
@@ -122,8 +141,8 @@ def hybrid_search(
     bm25_weight: float,
     fts_config: str,
 ) -> list[RetrievedChunk]:
-    vec = similarity_search(session, query_embedding=query_embedding, k=vector_k)
-    lex = bm25_search(session, query=query_text, k=bm25_k, fts_config=fts_config)
+    vec = similarity_search(session, query_embedding=query_embedding, workspace_id=workspace_id, kb_id=kb_id, k=vector_k)
+    lex = bm25_search(session, query=query_text, workspace_id=workspace_id, kb_id=kb_id, k=bm25_k, fts_config=fts_config)
 
     if not vec and not lex:
         return []

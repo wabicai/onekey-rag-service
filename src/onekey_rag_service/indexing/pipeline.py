@@ -18,11 +18,20 @@ def index_pages_to_chunks(
     *,
     embeddings: EmbeddingsProvider,
     embedding_model_name: str,
+    workspace_id: str = "default",
+    kb_id: str = "default",
     chunk_max_chars: int = 2400,
     chunk_overlap_chars: int = 200,
     mode: str = "incremental",
 ) -> dict[str, int]:
-    pages = session.scalars(select(Page).where(Page.http_status < 400)).all()
+    pages = (
+        session.scalars(
+            select(Page)
+            .where(Page.workspace_id == workspace_id)
+            .where(Page.kb_id == kb_id)
+            .where(Page.http_status < 400)
+        ).all()
+    )
 
     indexed_pages = 0
     total_chunks = 0

@@ -55,6 +55,9 @@ async def _fetch_html(client: httpx.AsyncClient, url: str) -> httpx.Response:
 async def crawl_and_store_pages(
     session: Session,
     *,
+    workspace_id: str,
+    kb_id: str,
+    source_id: str = "",
     base_url: str,
     sitemap_url: str,
     max_pages: int,
@@ -116,7 +119,17 @@ async def crawl_and_store_pages(
                 status = resp.status_code
                 if status >= 400:
                     failed += 1
-                    _upsert_page(session, url=url, title="", content_markdown="", content_hash="", http_status=status)
+                    _upsert_page(
+                        session,
+                        url=url,
+                        workspace_id=workspace_id,
+                        kb_id=kb_id,
+                        source_id=source_id,
+                        title="",
+                        content_markdown="",
+                        content_hash="",
+                        http_status=status,
+                    )
                     continue
 
                 title, content = extract_readable(resp.text)
@@ -125,7 +138,7 @@ async def crawl_and_store_pages(
                 if mode == "incremental":
                     existing_hash = session.scalar(select(Page.content_hash).where(Page.url == url))
                     if existing_hash and existing_hash == content_hash:
-                        _touch_page(session, url=url, http_status=status)
+                        _touch_page(session, url=url, workspace_id=workspace_id, kb_id=kb_id, source_id=source_id, http_status=status)
                         succeeded += 1
                         _discover_links(resp.text, url, base_url, include, exclude, seen, q, max_pages=max_pages)
                         continue
@@ -133,6 +146,9 @@ async def crawl_and_store_pages(
                 _upsert_page(
                     session,
                     url=url,
+                    workspace_id=workspace_id,
+                    kb_id=kb_id,
+                    source_id=source_id,
                     title=title,
                     content_markdown=content,
                     content_hash=content_hash,
@@ -143,16 +159,29 @@ async def crawl_and_store_pages(
             except Exception as e:
                 logger.exception("抓取失败 url=%s err=%s", url, e)
                 failed += 1
-                _upsert_page(session, url=url, title="", content_markdown="", content_hash="", http_status=0)
+                _upsert_page(
+                    session,
+                    url=url,
+                    workspace_id=workspace_id,
+                    kb_id=kb_id,
+                    source_id=source_id,
+                    title="",
+                    content_markdown="",
+                    content_hash="",
+                    http_status=0,
+                )
 
         session.commit()
         return CrawlResult(discovered=max(discovered, len(seen)), fetched=fetched, succeeded=succeeded, failed=failed)
 
 
-def _touch_page(session: Session, *, url: str, http_status: int) -> None:
+def _touch_page(session: Session, *, url: str, workspace_id: str, kb_id: str, source_id: str, http_status: int) -> None:
     page = session.scalar(select(Page).where(Page.url == url))
     if not page:
         return
+    page.workspace_id = workspace_id
+    page.kb_id = kb_id
+    page.source_id = source_id
     page.http_status = http_status
     page.last_crawled_at = dt.datetime.utcnow()
 
@@ -161,6 +190,9 @@ def _upsert_page(
     session: Session,
     *,
     url: str,
+    workspace_id: str,
+    kb_id: str,
+    source_id: str,
     title: str,
     content_markdown: str,
     content_hash: str,
@@ -168,8 +200,13 @@ def _upsert_page(
 ) -> None:
     page = session.scalar(select(Page).where(Page.url == url))
     if not page:
-        page = Page(url=url)
+        page = Page(url=url, workspace_id=workspace_id, kb_id=kb_id, source_id=source_id)
         session.add(page)
+    else:
+        # 兼容历史“单库”数据：允许在首次迁移时把旧 page 归属到指定 KB
+        page.workspace_id = workspace_id
+        page.kb_id = kb_id
+        page.source_id = source_id
 
     page.title = title or page.title
     page.content_markdown = content_markdown or page.content_markdown

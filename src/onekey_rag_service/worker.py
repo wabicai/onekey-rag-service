@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from onekey_rag_service.config import Settings, get_settings
 from onekey_rag_service.crawler.pipeline import crawl_and_store_pages
-from onekey_rag_service.db import create_db_engine, create_session_factory, ensure_indexes, ensure_pgvector_extension
+from onekey_rag_service.admin.bootstrap import ensure_default_entities
+from onekey_rag_service.db import create_all_safe, create_db_engine, create_session_factory, ensure_admin_schema, ensure_indexes, ensure_pgvector_extension
 from onekey_rag_service.indexing.pipeline import index_pages_to_chunks
 from onekey_rag_service.logging import configure_logging
 from onekey_rag_service.models import Base, Job
@@ -91,8 +92,11 @@ def _claim_next_job(session: Session) -> Job | None:
 async def _handle_crawl_job(session: Session, *, settings: Settings, payload: dict[str, Any]) -> dict:
     result = await crawl_and_store_pages(
         session,
-        base_url=str(settings.crawl_base_url),
-        sitemap_url=str(payload.get("sitemap_url") or settings.crawl_sitemap_url),
+        workspace_id=str(payload.get("workspace_id") or "default"),
+        kb_id=str(payload.get("kb_id") or "default"),
+        source_id=str(payload.get("source_id") or ""),
+        base_url=str(payload.get("base_url") or settings.crawl_base_url),
+        sitemap_url=str(payload.get("sitemap_url") or payload.get("CRAWL_SITEMAP_URL") or settings.crawl_sitemap_url),
         max_pages=int(payload.get("max_pages") or settings.crawl_max_pages),
         seed_urls=payload.get("seed_urls"),
         include_patterns=payload.get("include_patterns"),
@@ -115,6 +119,8 @@ def _handle_index_job(
         session,
         embeddings=embeddings,
         embedding_model_name=embedding_model_name,
+        workspace_id=str(payload.get("workspace_id") or "default"),
+        kb_id=str(payload.get("kb_id") or "default"),
         chunk_max_chars=settings.chunk_max_chars,
         chunk_overlap_chars=settings.chunk_overlap_chars,
         mode=mode,
@@ -204,9 +210,13 @@ async def main() -> None:
 
     engine = create_db_engine(settings)
     ensure_pgvector_extension(engine)
-    Base.metadata.create_all(engine)
+    create_all_safe(engine, Base.metadata)
+    ensure_admin_schema(engine)
     ensure_indexes(engine, settings)
     session_factory = create_session_factory(engine)
+
+    with session_factory() as session:
+        ensure_default_entities(session, settings=settings)
 
     embeddings, embedding_model_name = build_embeddings_provider(settings)
 

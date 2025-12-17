@@ -18,6 +18,10 @@ node_modules/
 .env.*
 !.env.example
 
+# 生产部署文件（含敏感信息的真实文件不提交）
+deploy/Caddyfile
+docker-compose.vps.yml
+
 data/
 *.log
 *.pid

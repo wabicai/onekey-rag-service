@@ -13,6 +13,7 @@ from onekey_rag_service.rag.conversation import compact_conversation, extract_sy
 from onekey_rag_service.rag.embeddings import EmbeddingsProvider
 from onekey_rag_service.rag.pgvector_store import RetrievedChunk, hybrid_search, similarity_search
 from onekey_rag_service.rag.reranker import Reranker
+from onekey_rag_service.rag.kb_allocation import KbAllocation
 from onekey_rag_service.utils import clamp_text
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ class RagAnswer:
     sources: list[dict]
     debug: dict | None = None
     usage: dict | None = None
+    meta: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,19 @@ class RagPrepared:
     sources: list[dict]
     debug: dict | None = None
     direct_answer: str | None = None
+    meta: dict | None = None
+
+
+def _merge_candidates(candidates: list[list[RetrievedChunk]], *, k: int) -> list[RetrievedChunk]:
+    by_id: dict[int, RetrievedChunk] = {}
+    for group in candidates:
+        for c in group:
+            prev = by_id.get(c.chunk_id)
+            if (not prev) or c.score > prev.score:
+                by_id[c.chunk_id] = c
+    merged = list(by_id.values())
+    merged.sort(key=lambda x: x.score, reverse=True)
+    return merged[:k]
 
 
 def _build_sources(chunks: list[RetrievedChunk], *, max_sources: int = 6) -> list[dict]:
@@ -169,6 +184,8 @@ async def prepare_rag(
     chat_model: str,
     request_messages: list[dict],
     question: str,
+    workspace_id: str = "default",
+    kb_allocations: list[KbAllocation] | None = None,
     debug: bool = False,
 ) -> RagPrepared:
     t_prepare = time.perf_counter()
@@ -220,22 +237,64 @@ async def prepare_rag(
     t_embed_ms = int((time.perf_counter() - t0) * 1000)
     mode = (settings.retrieval_mode or "vector").lower()
     t0 = time.perf_counter()
-    if mode == "hybrid":
-        retrieved = hybrid_search(
-            session,
-            query_text=retrieval_query,
-            query_embedding=qvec,
-            k=settings.rag_top_k,
-            vector_k=settings.hybrid_vector_k,
-            bm25_k=settings.hybrid_bm25_k,
-            vector_weight=settings.hybrid_vector_weight,
-            bm25_weight=settings.hybrid_bm25_weight,
-            fts_config=settings.bm25_fts_config,
-        )
+    allocations = [a for a in (kb_allocations or []) if int(a.top_k or 0) > 0]
+    if allocations:
+        groups: list[list[RetrievedChunk]] = []
+        for a in allocations:
+            per_k = max(1, int(a.top_k))
+            if mode == "hybrid":
+                groups.append(
+                    hybrid_search(
+                        session,
+                        query_text=retrieval_query,
+                        query_embedding=qvec,
+                        workspace_id=workspace_id,
+                        kb_id=a.kb_id,
+                        k=per_k,
+                        vector_k=min(settings.hybrid_vector_k, per_k),
+                        bm25_k=min(settings.hybrid_bm25_k, per_k),
+                        vector_weight=settings.hybrid_vector_weight,
+                        bm25_weight=settings.hybrid_bm25_weight,
+                        fts_config=settings.bm25_fts_config,
+                    )
+                )
+            else:
+                groups.append(
+                    similarity_search(
+                        session,
+                        query_embedding=qvec,
+                        workspace_id=workspace_id,
+                        kb_id=a.kb_id,
+                        k=per_k,
+                    )
+                )
+        retrieved = _merge_candidates(groups, k=settings.rag_top_k)
     else:
-        retrieved = similarity_search(session, query_embedding=qvec, k=settings.rag_top_k)
+        if mode == "hybrid":
+            retrieved = hybrid_search(
+                session,
+                query_text=retrieval_query,
+                query_embedding=qvec,
+                workspace_id=workspace_id,
+                kb_id=None,
+                k=settings.rag_top_k,
+                vector_k=settings.hybrid_vector_k,
+                bm25_k=settings.hybrid_bm25_k,
+                vector_weight=settings.hybrid_vector_weight,
+                bm25_weight=settings.hybrid_bm25_weight,
+                fts_config=settings.bm25_fts_config,
+            )
+        else:
+            retrieved = similarity_search(
+                session,
+                query_embedding=qvec,
+                workspace_id=workspace_id,
+                kb_id=None,
+                k=settings.rag_top_k,
+            )
     t_retrieve_ms = int((time.perf_counter() - t0) * 1000)
     ranked = retrieved
+    rerank_used = bool(reranker)
     if reranker:
         t0 = time.perf_counter()
         try:
@@ -246,6 +305,8 @@ async def prepare_rag(
 
     max_ctx = min(settings.rag_top_n, settings.rag_max_sources) if settings.inline_citations_enabled else settings.rag_top_n
     topn = ranked[:max_ctx]
+    orig_score_by_id = {c.chunk_id: c.score for c in retrieved}
+    top_scores_pre_rerank = [orig_score_by_id.get(c.chunk_id) for c in topn] if rerank_used else None
     if settings.inline_citations_enabled:
         sources = _build_inline_sources(topn, snippet_max_chars=settings.rag_snippet_max_chars, max_sources=max_ctx)
     else:
@@ -258,6 +319,22 @@ async def prepare_rag(
             direct_answer="我在 OneKey 开发者文档中没有检索到直接相关的内容。你可以换一种问法，或提供更具体的关键词（如 SDK 名称/方法名/报错信息）。",
             sources=[],
             debug={"retrieved": 0, "retrieval_query": retrieval_query, "used_compaction": used_compaction} if debug else None,
+            meta={
+                "workspace_id": workspace_id,
+                "kb_allocations": [a.__dict__ for a in allocations],
+                "retrieval_query": retrieval_query,
+                "retrieved": 0,
+                "rerank_used": rerank_used,
+                "timings_ms": {
+                    "compaction": t_compaction_ms,
+                    "embed": t_embed_ms,
+                    "retrieve": t_retrieve_ms,
+                    "rerank": t_rerank_ms,
+                    "context": t_context_ms,
+                    "total_prepare": int((time.perf_counter() - t_prepare) * 1000),
+                },
+                "used_compaction": used_compaction,
+            },
         )
 
     t0 = time.perf_counter()
@@ -315,7 +392,11 @@ async def prepare_rag(
     if debug:
         debug_obj = {
             "retrieved": len(retrieved),
+            "chunk_ids": [c.chunk_id for c in retrieved],
+            "top_chunk_ids": [c.chunk_id for c in topn],
             "top_scores": [c.score for c in topn],
+            "top_scores_pre_rerank": top_scores_pre_rerank,
+            "rerank_used": rerank_used,
             "retrieval_query": retrieval_query,
             "used_compaction": used_compaction,
             "timings_ms": {
@@ -332,6 +413,27 @@ async def prepare_rag(
         messages=messages,
         sources=sources,
         debug=debug_obj,
+        meta={
+            "workspace_id": workspace_id,
+            "kb_allocations": [a.__dict__ for a in allocations],
+            "retrieval_query": retrieval_query,
+            "retrieved": len(retrieved),
+            "chunk_ids": [c.chunk_id for c in retrieved],
+            "scores": [c.score for c in retrieved],
+            "top_chunk_ids": [c.chunk_id for c in topn],
+            "top_scores": [c.score for c in topn],
+            "top_scores_pre_rerank": top_scores_pre_rerank,
+            "rerank_used": rerank_used,
+            "timings_ms": {
+                "compaction": t_compaction_ms,
+                "embed": t_embed_ms,
+                "retrieve": t_retrieve_ms,
+                "rerank": t_rerank_ms,
+                "context": t_context_ms,
+                "total_prepare": int((time.perf_counter() - t_prepare) * 1000),
+            },
+            "used_compaction": used_compaction,
+        },
     )
 
 
@@ -345,6 +447,8 @@ async def answer_with_rag(
     chat_model: str,
     request_messages: list[dict],
     question: str,
+    workspace_id: str = "default",
+    kb_allocations: list[KbAllocation] | None = None,
     temperature: float | None = None,
     top_p: float | None = None,
     max_tokens: int | None = None,
@@ -359,17 +463,20 @@ async def answer_with_rag(
         chat_model=chat_model,
         request_messages=request_messages,
         question=question,
+        workspace_id=workspace_id,
+        kb_allocations=kb_allocations,
         debug=debug,
     )
 
     if prepared.direct_answer is not None:
-        return RagAnswer(answer=prepared.direct_answer, sources=prepared.sources, debug=prepared.debug)
+        return RagAnswer(answer=prepared.direct_answer, sources=prepared.sources, debug=prepared.debug, meta=prepared.meta)
 
     if not prepared.messages:
         return RagAnswer(
             answer="我在 OneKey 开发者文档中没有检索到直接相关的内容。你可以换一种问法，或提供更具体的关键词（如 SDK 名称/方法名/报错信息）。",
             sources=[],
             debug=prepared.debug,
+            meta=prepared.meta,
         )
 
     sources = prepared.sources
@@ -381,7 +488,7 @@ async def answer_with_rag(
             "下面是检索到的可能的相关文档片段（请优先查看来源链接）：\n"
             + "\n".join([f"- {s['title'] or s['url']}（{s['url']}）" for s in sources[:5]])
         )
-        return RagAnswer(answer=answer, sources=sources, debug=prepared.debug)
+        return RagAnswer(answer=answer, sources=sources, debug=prepared.debug, meta=prepared.meta)
 
     t0 = time.perf_counter()
     result = await chat.complete(
@@ -392,6 +499,16 @@ async def answer_with_rag(
         max_tokens=max_tokens,
     )
     chat_ms = int((time.perf_counter() - t0) * 1000)
+
+    # 观测：把 chat 耗时写入 meta，便于 admin 聚合统计（不依赖 debug=true）
+    try:
+        timings_meta = dict((prepared.meta or {}).get("timings_ms") or {})
+        timings_meta["chat"] = chat_ms
+        if "total_prepare" in timings_meta and isinstance(timings_meta.get("total_prepare"), (int, float)):
+            timings_meta["total"] = int(timings_meta["total_prepare"]) + int(chat_ms)
+        prepared.meta["timings_ms"] = timings_meta
+    except Exception:
+        pass
 
     content = (result.content or "").strip()
     if settings.inline_citations_enabled:
@@ -414,4 +531,5 @@ async def answer_with_rag(
         sources=sources,
         usage=result.usage,
         debug=debug_obj,
+        meta=prepared.meta,
     )

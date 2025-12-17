@@ -101,6 +101,20 @@ class Settings(BaseSettings):
     # 为空表示不额外下发 frame-ancestors 限制；生产建议配置为："'self' https://developer.onekey.so"
     widget_frame_ancestors: str = Field(default="", alias="WIDGET_FRAME_ANCESTORS")
 
+    # ========== Admin（企业后台）==========
+    admin_username: str = Field(default="admin", alias="ADMIN_USERNAME")
+    admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
+    admin_jwt_secret: str = Field(default="dev-secret-change-me", alias="ADMIN_JWT_SECRET")
+    admin_jwt_expires_s: int = Field(default=3600, alias="ADMIN_JWT_EXPIRES_S")
+
+    # ========== Observability（仅存检索元数据）==========
+    retrieval_events_enabled: bool = Field(default=True, alias="RETRIEVAL_EVENTS_ENABLED")
+
+    # ========== Pricing（可选，用于成本估算）==========
+    # JSON 格式示例：
+    # {"gpt-4o-mini":{"prompt_usd_per_1k":0.00015,"completion_usd_per_1k":0.0006}}
+    pricing_json: str | None = Field(default=None, alias="MODEL_PRICING_JSON")
+
     def chat_model_map(self) -> dict[str, str]:
         if not self.chat_model_map_json:
             return {}
@@ -118,6 +132,35 @@ class Settings(BaseSettings):
             if not k.strip() or not v.strip():
                 continue
             result[k.strip()] = v.strip()
+        return result
+
+    def model_pricing(self) -> dict[str, dict[str, float]]:
+        """
+        返回模型计价配置，用于 Admin 的成本估算（非强一致，主要用于内部观测）。
+
+        格式：{model: {prompt_usd_per_1k: float, completion_usd_per_1k: float}}
+        """
+
+        if not self.pricing_json:
+            return {}
+        try:
+            data = json.loads(self.pricing_json)
+        except Exception as e:
+            raise RuntimeError("MODEL_PRICING_JSON 不是合法 JSON") from e
+        if not isinstance(data, dict):
+            raise RuntimeError("MODEL_PRICING_JSON 需要是 JSON 对象（dict）")
+
+        result: dict[str, dict[str, float]] = {}
+        for k, v in data.items():
+            if not isinstance(k, str) or not k.strip():
+                continue
+            if not isinstance(v, dict):
+                continue
+            prompt = v.get("prompt_usd_per_1k")
+            completion = v.get("completion_usd_per_1k")
+            if not isinstance(prompt, (int, float)) or not isinstance(completion, (int, float)):
+                continue
+            result[k.strip()] = {"prompt_usd_per_1k": float(prompt), "completion_usd_per_1k": float(completion)}
         return result
 
 
