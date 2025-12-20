@@ -1,0 +1,10 @@
+:8000 {
+  @admin_ui path /admin/ui /admin/ui/*
+  handle @admin_ui {
+    reverse_proxy frontend-admin:5174
+  }
+
+  handle {
+    reverse_proxy api:8000
+  }
+}

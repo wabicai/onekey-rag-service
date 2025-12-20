@@ -7,14 +7,18 @@
 ## 一、部署准备
 
 1. **镜像与版本管理**：使用官方镜像 `langfuse/langfuse:<tag>`，默认可先用 `latest` 拉起，确认可用 tag 后再固定到具体版本并更新 `docs/langfuse-version.md`（记录 tag/拉取日期/维护人）。升级前阅读官方 `CHANGELOG` 评估迁移影响。若需 UI/认证定制，可基于官方镜像构建 `langfuse-custom:<tag>`，并在版本记录中注明补丁与回滚 tag。
-2. **依赖服务**：Langfuse 依赖 PostgreSQL、Redis、Meilisearch/Elasticsearch（可选），以及对象存储（S3、MinIO）。优先复用现有集群，但使用独立数据库/用户/schema 或 Redis db index/prefix。
+2. **依赖服务**：Langfuse 依赖 PostgreSQL、Redis、ClickHouse（v3 必需）、Meilisearch/Elasticsearch（可选），以及对象存储（S3、MinIO）。优先复用现有集群，但使用独立数据库/用户/schema 或 Redis db index/prefix。
 3. **网络与安全**：部署在内网，暴露端口（默认 3000）由 nginx 反向代理；配置 TLS/认证。为便于 Langchain 服务调用，在 same VPC 内开放 API 访问。
 4. **预先准备环境变量**：在主仓库 `.env`（或 Secret Manager）中至少设置（已同步到 `.env.example`）：
    ```env
-   LANGFUSE_VERSION=latest   # 先用最新镜像，确认可用 tag 后再锁定（例如 v2.4x.x），并更新 docs/langfuse-version.md
+   LANGFUSE_VERSION=latest   # v3 需要 ClickHouse；确认可用 tag 后再锁定（如 v3.x），并更新 docs/langfuse-version.md
    LANGFUSE_BASE_URL=http://localhost:3000
-   LANGFUSE_DATABASE_URL=postgresql://langfuse:langfuse@postgres:5432/langfuse   # 复用 Postgres，但独立 DB/用户
+   LANGFUSE_DATABASE_URL=postgresql://postgres:postgres@postgres:5432/langfuse           # 默认用 Postgres 超管，首次启动会创建 langfuse DB；生产请改强密码/独立用户
    LANGFUSE_REDIS_URL=redis://langfuse-redis:6379/0                               # 默认用内置 redis，如需复用外部 Redis 则修改
+   CLICKHOUSE_URL=clickhouse://default:@clickhouse:9000/langfuse                 # Langfuse v3 必需（native 协议，无密码）
+   CLICKHOUSE_MIGRATION_URL=clickhouse://default:@clickhouse:9000/langfuse       # 迁移必需，通常与 CLICKHOUSE_URL 相同
+   CLICKHOUSE_USER=default
+   CLICKHOUSE_PASSWORD=                                                          # 若设密码请同步 compose 与 URL
    LANGFUSE_PUBLIC_KEY=
    LANGFUSE_SECRET_KEY=
    LANGFUSE_SECRET_KEY_BASE=xxx
@@ -40,7 +44,7 @@
 
 ## 二、部署流程
 
-1. **使用主 `docker-compose.yml`（已内置 Langfuse）**：本仓的 compose 默认包含 `langfuse` 与 `langfuse-redis` 服务，可一键启动。
+1. **使用主 `docker-compose.yml`（已内置 Langfuse）**：本仓的 compose 默认包含 `langfuse`、`langfuse-redis`、`clickhouse` 服务，可一键启动。
    ```yaml
    services:
      langfuse:
@@ -50,6 +54,7 @@
        environment:
          DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://langfuse:langfuse@postgres:5432/langfuse}
          REDIS_URL: ${LANGFUSE_REDIS_URL:-redis://langfuse-redis:6379/0}
+         CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://clickhouse:8123}
          SECRET_KEY_BASE: ${LANGFUSE_SECRET_KEY_BASE:-changeme}
          LANGFUSE_API_KEY: ${LANGFUSE_API_KEY:-changeme}
          LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -69,6 +74,8 @@
            condition: service_healthy
          langfuse-redis:
            condition: service_started
+         clickhouse:
+            condition: service_started
 
    langfuse-redis:
      image: redis:7
@@ -76,14 +83,23 @@
      volumes:
        - langfuse-redis:/data
      restart: unless-stopped
+
+   clickhouse:
+     image: clickhouse/clickhouse-server:24.3
+     environment:
+       CLICKHOUSE_DB: langfuse
+     volumes:
+       - clickhouse-data:/var/lib/clickhouse
+     restart: unless-stopped
    ```
    根据环境需要再添加对象存储、Search 后端的 env。
 2. **数据库与缓存**：确保 `LANGFUSE_DATABASE_URL` 指向可访问的 PostgreSQL 实例（推荐独立 DB/用户），内置 Redis 默认 AOF 持久化；如需外部 Redis，修改 `LANGFUSE_REDIS_URL`。
+   - 本仓提供 `deploy/init-langfuse.sql`，首次启动 Postgres 容器会自动创建 `langfuse` 数据库与用户/密码（默认弱口令 `langfuse`，生产请修改脚本或 `.env` 为强密码后再首次启动）。
 3. **启动**：在根目录执行：
    ```bash
    docker compose up -d
    ```
-   仅启动 Langfuse 时可运行 `docker compose up -d langfuse langfuse-redis postgres`。
+   仅启动 Langfuse 时可运行 `docker compose up -d langfuse langfuse-redis clickhouse postgres`。
 4. **自定义扩展**：若需要插件/认证扩展，可自建镜像（Dockerfile）并替换 `image`；或通过 `LANGFUSE_PLUGIN_IMPORT_PATHS` 挂载自定义包。
 5. **数据备份**：定期备份 PostgreSQL 和对象存储（用于事件数据、查询历史）；可通过 crontab 调度备份脚本。
 6. **外部访问**：完成部署后，访问 `http://localhost:3000` 验证 UI；将 `LANGFUSE_API_KEY` 作为服务调用凭据，并与主系统共享用于校验来源。

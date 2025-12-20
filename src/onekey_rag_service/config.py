@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     # ========== Admin（企业后台）==========
     admin_username: str = Field(default="admin", alias="ADMIN_USERNAME")
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
-    admin_jwt_secret: str = Field(default="dev-secret-change-me", alias="ADMIN_JWT_SECRET")
+    admin_jwt_secret: str = Field(default="replace-me", alias="ADMIN_JWT_SECRET")
     admin_jwt_expires_s: int = Field(default=3600, alias="ADMIN_JWT_EXPIRES_S")
 
     # ========== Observability（仅存检索元数据）==========

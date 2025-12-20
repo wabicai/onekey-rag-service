@@ -88,6 +88,7 @@ function ms(v: number | null | undefined): string {
   return `${Math.round(v)}ms`;
 }
 
+
 export function QualityPage() {
   const { workspaceId } = useWorkspace();
   const [range, setRange] = useState<string>("24h");

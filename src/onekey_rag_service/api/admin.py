@@ -2599,7 +2599,7 @@ def observability_summary(
                   WHEN json_typeof(retrieval->'top_chunk_ids')='array' THEN json_array_length(retrieval->'top_chunk_ids')
                   ELSE 0
                 END
-              ) AS avg_topn,
+              )::double precision AS avg_topn,
               SUM(COALESCE((token_usage->>'prompt_tokens')::bigint, 0)) AS prompt_tokens,
               SUM(COALESCE((token_usage->>'completion_tokens')::bigint, 0)) AS completion_tokens,
               SUM(COALESCE((token_usage->>'total_tokens')::bigint, 0)) AS total_tokens
@@ -2799,6 +2799,14 @@ def observability_summary(
     def _ratio(n: int, d: int) -> float:
         return (float(n) / float(d)) if d else 0.0
 
+    def _to_float_or_none(v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     overall_requests = int(overall.get("requests") or 0)
     overall_errors = int(overall.get("errors") or 0)
     overall_hits = int(overall.get("hits") or 0)
@@ -2810,12 +2818,15 @@ def observability_summary(
             **dict(overall),
             "error_ratio": _ratio(overall_errors, overall_requests),
             "hit_ratio": _ratio(overall_hits, overall_requests),
+            "avg_retrieved": _to_float_or_none(overall.get("avg_retrieved")),
+            "avg_topn": _to_float_or_none(overall.get("avg_topn")),
         },
         "by_app": [
             {
                 **dict(r),
                 "error_ratio": _ratio(int(r.get("errors") or 0), int(r.get("requests") or 0)),
                 "hit_ratio": _ratio(int(r.get("hits") or 0), int(r.get("requests") or 0)),
+                "avg_retrieved": _to_float_or_none(r.get("avg_retrieved")),
             }
             for r in by_app
         ],
@@ -2824,6 +2835,7 @@ def observability_summary(
                 **dict(r),
                 "error_ratio": _ratio(int(r.get("errors") or 0), int(r.get("requests") or 0)),
                 "hit_ratio": _ratio(int(r.get("hits") or 0), int(r.get("requests") or 0)),
+                "avg_retrieved": _to_float_or_none(r.get("avg_retrieved")),
             }
             for r in by_app_kb
         ],

@@ -218,7 +218,7 @@ async def main() -> None:
     with session_factory() as session:
         ensure_default_entities(session, settings=settings)
 
-    embeddings, embedding_model_name = build_embeddings_provider(settings)
+    embeddings, embedding_model_name = build_embeddings_provider(settings, lazy=True)
 
     worker_id = os.getenv("WORKER_ID") or f"worker_{uuid.uuid4().hex[:10]}"
     poll_interval_s = _read_float("WORKER_POLL_INTERVAL_S", 1.0)

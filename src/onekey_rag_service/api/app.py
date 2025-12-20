@@ -135,7 +135,7 @@ def _startup() -> None:
     with app.state.SessionLocal() as session:
         ensure_default_entities(session, settings=settings)
 
-    embeddings, embedding_model_name = build_embeddings_provider(settings)
+    embeddings, embedding_model_name = build_embeddings_provider(settings, lazy=True)
     app.state.embeddings = embeddings
     app.state.embedding_model_name = embedding_model_name
     app.state.chat = build_chat_provider(settings)
@@ -425,24 +425,16 @@ async def openai_chat_completions(
 
             sources = (prepared.sources if prepared else []) or []
             if prepared and isinstance(prepared.meta, dict):
-                prepared.meta = dict(prepared.meta)
-                prepared.meta["requested_model"] = req.model
-                prepared.meta["upstream_chat_model"] = upstream_model
-                prepared.meta["chat_model_provider"] = settings.chat_model_provider
-                prepared.meta["chat_base_url"] = str(settings.chat_base_url)
-                prepared.meta["embeddings_provider"] = settings.embeddings_provider
-                prepared.meta["rerank_provider"] = settings.rerank_provider
-                prepared.meta["retrieval_mode"] = settings.retrieval_mode
-
-            event_meta = dict(prepared.meta or {}) if prepared else {}
-            if event_meta is not None:
-                event_meta.setdefault("requested_model", req.model)
-                event_meta.setdefault("upstream_chat_model", upstream_model)
-                event_meta.setdefault("chat_model_provider", settings.chat_model_provider)
-                event_meta.setdefault("chat_base_url", str(settings.chat_base_url))
-                event_meta.setdefault("embeddings_provider", settings.embeddings_provider)
-                event_meta.setdefault("rerank_provider", settings.rerank_provider)
-                event_meta.setdefault("retrieval_mode", settings.retrieval_mode)
+                event_meta = dict(prepared.meta)
+            else:
+                event_meta = {}
+            event_meta.setdefault("requested_model", req.model)
+            event_meta.setdefault("upstream_chat_model", upstream_model)
+            event_meta.setdefault("chat_model_provider", settings.chat_model_provider)
+            event_meta.setdefault("chat_base_url", str(settings.chat_base_url))
+            event_meta.setdefault("embeddings_provider", settings.embeddings_provider)
+            event_meta.setdefault("rerank_provider", settings.rerank_provider)
+            event_meta.setdefault("retrieval_mode", settings.retrieval_mode)
 
             _save_retrieval_event(
                 db,

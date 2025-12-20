@@ -2,13 +2,14 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-replace-me}
       POSTGRES_DB: onekey_rag
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./deploy/init-langfuse.sql:/docker-entrypoint-initdb.d/init-langfuse.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d onekey_rag"]
       interval: 5s
@@ -23,7 +24,7 @@ services:
       APP_ENV: ${APP_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/onekey_rag}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:replace-me@postgres:5432/onekey_rag}
       PGVECTOR_EMBEDDING_DIM: ${PGVECTOR_EMBEDDING_DIM:-768}
       JOBS_BACKEND: ${JOBS_BACKEND:-worker}
 
@@ -86,8 +87,6 @@ services:
       # CHAT_API_KEY: 请放到 .env 文件里（不要提交到仓库）
     env_file:
       - .env
-    ports:
-      - "8000:8000"
     volumes:
       # 缓存 HuggingFace 模型下载（sentence-transformers/transformers）
       - hf_cache:/root/.cache/huggingface
@@ -106,7 +105,7 @@ services:
       APP_ENV: ${APP_ENV:-local}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
 
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:postgres@postgres:5432/onekey_rag}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg2://postgres:replace-me@postgres:5432/onekey_rag}
       PGVECTOR_EMBEDDING_DIM: ${PGVECTOR_EMBEDDING_DIM:-768}
       JOBS_BACKEND: ${JOBS_BACKEND:-worker}
 
@@ -155,8 +154,10 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://langfuse:langfuse@postgres:5432/langfuse}
+      DATABASE_URL: ${LANGFUSE_DATABASE_URL:-postgresql://postgres:replace-me@postgres:5432/langfuse}
       REDIS_URL: ${LANGFUSE_REDIS_URL:-redis://langfuse-redis:6379/0}
+      CLICKHOUSE_URL: ${CLICKHOUSE_URL:-http://default:replace-me@clickhouse:8123/langfuse}
+      CLICKHOUSE_MIGRATION_URL: ${CLICKHOUSE_MIGRATION_URL:-clickhouse://default:replace-me@clickhouse:9000/langfuse}
       SECRET_KEY_BASE: ${LANGFUSE_SECRET_KEY_BASE:-changeme}
       LANGFUSE_API_KEY: ${LANGFUSE_API_KEY:-changeme}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
@@ -176,6 +177,8 @@ services:
         condition: service_healthy
       langfuse-redis:
         condition: service_started
+      clickhouse:
+        condition: service_healthy
     restart: unless-stopped
 
   langfuse-redis:
@@ -185,7 +188,69 @@ services:
       - langfuse-redis:/data
     restart: unless-stopped
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_DB: langfuse
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-replace-me}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./deploy/clickhouse/remote_servers.xml:/etc/clickhouse-server/config.d/remote_servers.xml:ro
+      - ./deploy/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+      - ./deploy/clickhouse/macros.xml:/etc/clickhouse-server/config.d/macros.xml:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-c", "yarn install --frozen-lockfile && yarn dev"]
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    depends_on:
+      api:
+        condition: service_started
+
+  frontend-admin:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-c", "yarn install --frozen-lockfile && yarn dev"]
+    environment:
+      VITE_ADMIN_API_PROXY_TARGET: http://api:8000
+    volumes:
+      - ./frontend-admin:/app
+      - frontend-admin-node-modules:/app/node_modules
+    depends_on:
+      api:
+        condition: service_started
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./deploy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api:
+        condition: service_started
+      frontend-admin:
+        condition: service_started
+
 volumes:
   pgdata:
   hf_cache:
   langfuse-redis:
+  clickhouse-data:
+  frontend-node-modules:
+  frontend-admin-node-modules:

@@ -1,0 +1,19 @@
+<clickhouse>
+  <zookeeper>
+    <node>
+      <host>clickhouse</host>
+      <port>9181</port>
+    </node>
+  </zookeeper>
+  <keeper_server>
+    <tcp_port>9181</tcp_port>
+    <server_id>1</server_id>
+    <raft_configuration>
+      <server>
+        <id>1</id>
+        <hostname>clickhouse</hostname>
+        <port>9444</port>
+      </server>
+    </raft_configuration>
+  </keeper_server>
+</clickhouse>

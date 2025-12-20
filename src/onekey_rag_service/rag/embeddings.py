@@ -6,6 +6,7 @@ import math
 import threading
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 import httpx
 
@@ -18,6 +19,28 @@ class EmbeddingsProvider:
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed_documents([text])[0]
+
+
+class LazyEmbeddingsProvider(EmbeddingsProvider):
+    def __init__(self, factory: Callable[[], EmbeddingsProvider], name: str) -> None:
+        self._factory = factory
+        self._name = name
+        self._inner: EmbeddingsProvider | None = None
+        self._lock = threading.Lock()
+
+    def _get_inner(self) -> EmbeddingsProvider:
+        if self._inner is not None:
+            return self._inner
+        with self._lock:
+            if self._inner is None:
+                self._inner = self._factory()
+        return self._inner
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self._get_inner().embed_documents(texts)
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._get_inner().embed_query(text)
 
 
 @dataclass(frozen=True)
@@ -151,7 +174,15 @@ class OllamaEmbeddings(EmbeddingsProvider):
             return vectors
 
 
-def build_embeddings_provider(settings: Settings) -> tuple[EmbeddingsProvider, str]:
+def build_embeddings_provider(settings: Settings, *, lazy: bool = False) -> tuple[EmbeddingsProvider, str]:
+    if lazy:
+        name = _resolve_embeddings_name(settings)
+        provider = LazyEmbeddingsProvider(lambda: _build_embeddings_provider(settings)[0], name)
+        return provider, name
+    return _build_embeddings_provider(settings)
+
+
+def _build_embeddings_provider(settings: Settings) -> tuple[EmbeddingsProvider, str]:
     provider = settings.embeddings_provider.lower()
 
     if provider == "fake":
@@ -178,6 +209,28 @@ def build_embeddings_provider(settings: Settings) -> tuple[EmbeddingsProvider, s
             model="text-embedding-3-small",
         )
         return _wrap_with_cache(base, "openai_compatible:text-embedding-3-small", settings=settings)
+
+    raise RuntimeError(f"未知 EMBEDDINGS_PROVIDER: {settings.embeddings_provider}")
+
+
+def _resolve_embeddings_name(settings: Settings) -> str:
+    provider = settings.embeddings_provider.lower()
+
+    if provider == "fake":
+        return f"fake:{settings.pgvector_embedding_dim}"
+
+    if provider == "sentence_transformers":
+        if not settings.sentence_transformers_model:
+            raise RuntimeError("EMBEDDINGS_PROVIDER=sentence_transformers 需要配置 SENTENCE_TRANSFORMERS_MODEL")
+        return settings.sentence_transformers_model
+
+    if provider == "ollama":
+        return f"ollama:{settings.ollama_embedding_model}"
+
+    if provider == "openai_compatible":
+        if not settings.chat_api_key:
+            raise RuntimeError("EMBEDDINGS_PROVIDER=openai_compatible 需要配置 CHAT_API_KEY（或另行扩展 embedding key）")
+        return "openai_compatible:text-embedding-3-small"
 
     raise RuntimeError(f"未知 EMBEDDINGS_PROVIDER: {settings.embeddings_provider}")
 
