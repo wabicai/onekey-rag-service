@@ -87,6 +87,8 @@ services:
       # CHAT_API_KEY: 请放到 .env 文件里（不要提交到仓库）
     env_file:
       - .env
+    ports:
+      - "8000:8000"
     volumes:
       # 缓存 HuggingFace 模型下载（sentence-transformers/transformers）
       - hf_cache:/root/.cache/huggingface
