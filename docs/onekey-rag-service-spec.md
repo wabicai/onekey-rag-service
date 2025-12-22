@@ -343,9 +343,14 @@ OneKey 开发者文档覆盖 SDK/API/集成指南/故障排查等内容。为了
     { "role": "system", "content": "你是 OneKey 开发者文档助手，回答必须给出来源链接。" },
     { "role": "user", "content": "如何在 Next.js 里集成 OneKey 登录？" }
   ],
-  "stream": false
+  "stream": false,
+  "response_format": { "type": "json_object" }
 }
 ```
+
+说明：
+- `response_format` 为 JSON 模式（上游模型需支持）。
+- `stream=true` 与 `response_format` 不能同时使用。
 
 ##### 非流式响应（建议结构）
 ```json

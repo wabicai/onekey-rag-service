@@ -42,6 +42,7 @@ class LangChainInitChatProvider(ChatProvider):
         temperature: float | None,
         top_p: float | None,
         max_tokens: int | None,
+        response_format: dict[str, Any] | None,
         callbacks: list[Any] | None,
     ):
         try:
@@ -62,6 +63,7 @@ class LangChainInitChatProvider(ChatProvider):
             "max_retries": self.max_retries,
             "base_url": base_url,
             "api_key": self.api_key,
+            "response_format": response_format,
         }
         if callbacks:
             kwargs["callbacks"] = callbacks
@@ -81,12 +83,32 @@ class LangChainInitChatProvider(ChatProvider):
         temperature: float | None = None,
         top_p: float | None = None,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
         **_: Any,
     ) -> ChatResult:
         lc_model = self._build_model(
-            model=model, temperature=temperature, top_p=top_p, max_tokens=max_tokens, callbacks=callbacks
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            callbacks=callbacks,
         )
-        msg = await lc_model.ainvoke(messages)
+        try:
+            msg = await lc_model.ainvoke(messages)
+        except Exception as e:
+            if response_format and _maybe_response_format_error(e):
+                lc_model = self._build_model(
+                    model=model,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    response_format=None,
+                    callbacks=callbacks,
+                )
+                msg = await lc_model.ainvoke(messages)
+            else:
+                raise
 
         content = ""
         text = getattr(msg, "text", None)
@@ -108,10 +130,16 @@ class LangChainInitChatProvider(ChatProvider):
         temperature: float | None = None,
         top_p: float | None = None,
         max_tokens: int | None = None,
+        response_format: dict[str, Any] | None = None,
         **_: Any,
     ) -> AsyncIterator[str]:
         lc_model = self._build_model(
-            model=model, temperature=temperature, top_p=top_p, max_tokens=max_tokens, callbacks=callbacks
+            model=model,
+            temperature=temperature,
+            top_p=top_p,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            callbacks=callbacks,
         )
         async for chunk in lc_model.astream(messages):
             text = _extract_chunk_text(chunk)
@@ -178,6 +206,18 @@ def _extract_chunk_text(chunk: Any) -> str:
             return "".join(parts)
 
     return ""
+
+
+def _maybe_response_format_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    keywords = [
+        "response_format",
+        "json_object",
+        "json mode",
+        "unknown parameter",
+        "invalid parameter",
+    ]
+    return any(k in message for k in keywords)
 
 
 def build_chat_provider(settings: Settings) -> ChatProvider | None:

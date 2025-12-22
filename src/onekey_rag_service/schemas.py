@@ -22,6 +22,7 @@ class OpenAIChatCompletionsRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     max_tokens: int | None = None
+    response_format: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     debug: bool = False
 

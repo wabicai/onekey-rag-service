@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+import json
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -17,6 +18,50 @@ from onekey_rag_service.rag.kb_allocation import KbAllocation
 from onekey_rag_service.utils import clamp_text
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_code_fences(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if t.startswith("```"):
+        t = t.split("\n", 1)[-1]
+        if t.endswith("```"):
+            t = t[: -3]
+    return t.strip()
+
+
+def _extract_json_object(text: str) -> str:
+    t = _strip_code_fences(text)
+    if not t:
+        return ""
+    start = t.find("{")
+    end = t.rfind("}")
+    if start >= 0 and end > start:
+        return t[start : end + 1].strip()
+    return t
+
+
+def _ensure_json_object(content: str) -> str:
+    """
+    JSON 模式兜底：确保返回值是一个 JSON object 字符串。
+    """
+    raw = _extract_json_object(content)
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return json.dumps(data, ensure_ascii=False)
+            return json.dumps({"data": data}, ensure_ascii=False)
+        except Exception:
+            pass
+    return json.dumps(
+        {
+            "error": "invalid_json",
+            "message": clamp_text((content or "").strip(), 2000),
+        },
+        ensure_ascii=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -454,6 +499,7 @@ async def answer_with_rag(
     temperature: float | None = None,
     top_p: float | None = None,
     max_tokens: int | None = None,
+    response_format: dict[str, Any] | None = None,
     debug: bool = False,
     callbacks: list | None = None,
 ) -> RagAnswer:
@@ -501,6 +547,7 @@ async def answer_with_rag(
         temperature=temperature,
         top_p=top_p,
         max_tokens=max_tokens,
+        response_format=response_format,
         callbacks=callbacks,
     )
     chat_ms = int((time.perf_counter() - t0) * 1000)
@@ -516,14 +563,18 @@ async def answer_with_rag(
         pass
 
     content = (result.content or "").strip()
-    if settings.inline_citations_enabled:
-        content = _sanitize_inline_citations(content, max_ref=len(sources))
-        # 如果模型没按要求输出引用，至少在末尾补一个参考（避免“无可追溯”）
-        if sources and not _has_any_inline_citation(content):
-            content = (content + "\n\n（未能在正文中生成引用标记，已在参考中列出来源）").strip()
+    json_mode = bool(response_format) and response_format.get("type") == "json_object"
+    if json_mode:
+        content = _ensure_json_object(content)
+    else:
+        if settings.inline_citations_enabled:
+            content = _sanitize_inline_citations(content, max_ref=len(sources))
+            # 如果模型没按要求输出引用，至少在末尾补一个参考（避免“无可追溯”）
+            if sources and not _has_any_inline_citation(content):
+                content = (content + "\n\n（未能在正文中生成引用标记，已在参考中列出来源）").strip()
 
-    if sources and settings.answer_append_sources:
-        content += _build_references_tail(sources=sources, inline=settings.inline_citations_enabled)
+        if sources and settings.answer_append_sources:
+            content += _build_references_tail(sources=sources, inline=settings.inline_citations_enabled)
 
     debug_obj = prepared.debug
     if debug_obj is not None:

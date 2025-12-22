@@ -202,6 +202,8 @@ async def openai_chat_completions(
     req: OpenAIChatCompletionsRequest,
     db: Session = Depends(get_db),
 ):
+    if req.stream and req.response_format:
+        raise HTTPException(status_code=400, detail="stream 模式不支持 response_format")
     request_messages = [{"role": m.role, "content": m.content} for m in req.messages]
     question = ""
     for m in reversed(req.messages):
@@ -300,6 +302,7 @@ async def openai_chat_completions(
                     temperature=temperature,
                     top_p=top_p,
                     max_tokens=max_tokens,
+                    response_format=req.response_format,
                     debug=req.debug,
                     callbacks=callbacks,
                 ),
