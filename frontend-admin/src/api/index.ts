@@ -16,6 +16,5 @@ export * as jobs from "./jobs";
 export * as pages from "./pages";
 export * as feedback from "./feedback";
 export * as observability from "./observability";
-export * as audit from "./audit";
 export * as dashboard from "./dashboard";
 export * as settings from "./settings";

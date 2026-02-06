@@ -15,6 +15,5 @@ export * from "./job";
 export * from "./page";
 export * from "./feedback";
 export * from "./observability";
-export * from "./audit";
 export * from "./settings";
 export * from "./dashboard";

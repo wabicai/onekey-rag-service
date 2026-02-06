@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColumnDef } from "@tanstack/react-table";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { MoreHorizontal } from "lucide-react";
@@ -43,6 +43,17 @@ export function AppsPage() {
     queryFn: () => apiFetch<AppsResp>(`/admin/api/workspaces/${workspaceId}/apps`),
     enabled: !!workspaceId,
   });
+
+  // 允许从 Dashboard / 其他页面通过 ?create=1 直接打开创建对话框
+  const createParam = (sp.get("create") || "").trim();
+  useEffect(() => {
+    if (createParam !== "1") return;
+    setCreateOpen(true);
+    const next = new URLSearchParams(sp);
+    next.delete("create");
+    setSp(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createParam]);
 
   const pageSize = 20;
   const page = Math.max(1, Number.parseInt(sp.get("page") || "1", 10) || 1);
@@ -112,7 +123,18 @@ export function AppsPage() {
 
   const columns: Array<ColumnDef<AppsResp["items"][number], unknown>> = useMemo(
     () => [
-      { header: "名称", accessorKey: "name" },
+      {
+        header: "名称",
+        accessorKey: "name",
+        cell: (ctx) => {
+          const row = ctx.row.original;
+          return (
+            <Link className="font-medium hover:underline" to={`/apps/${encodeURIComponent(row.id)}`}>
+              {String(ctx.getValue() || "")}
+            </Link>
+          );
+        },
+      },
       {
         header: "model_id",
         accessorKey: "public_model_id",
@@ -127,7 +149,21 @@ export function AppsPage() {
           return <Badge variant={variant as any}>{v || "-"}</Badge>;
         },
       },
-      { header: "KB", accessorKey: "kb_count" },
+      {
+        header: "KB",
+        accessorKey: "kb_count",
+        cell: (ctx) => {
+          const row = ctx.row.original;
+          const n = Number(ctx.getValue() || 0) || 0;
+          return n > 0 ? (
+            <Link className="font-mono text-xs underline underline-offset-2" to={`/kbs?app_id=${encodeURIComponent(row.id)}`}>
+              {n}
+            </Link>
+          ) : (
+            <span className="font-mono text-xs text-muted-foreground">0</span>
+          );
+        },
+      },
       { header: "更新时间", accessorKey: "updated_at", cell: (ctx) => <span className="text-muted-foreground">{String(ctx.getValue() || "-")}</span> },
       {
         header: "操作",
@@ -143,16 +179,25 @@ export function AppsPage() {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
-                  <Link to={`/apps/${row.id}`}>查看详情</Link>
+                  <Link to={`/apps/${encodeURIComponent(row.id)}`}>查看详情</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to={`/kbs?app_id=${encodeURIComponent(row.id)}`}>查看关联 KB</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to={`/jobs?app_id=${encodeURIComponent(row.id)}`}>运行中心（按应用）</Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link to={`/observability?app_id=${encodeURIComponent(row.id)}`}>观测（按应用）</Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onSelect={(e) => {
                     e.preventDefault();
-                    void copyText(row.id, "已复制 app_id");
+                    void copyText(row.id, "已复制应用ID");
                   }}
                 >
-                  复制 app_id
+                  复制应用ID
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!row.public_model_id}
@@ -186,7 +231,7 @@ export function AppsPage() {
                     confirmLabel="继续禁用"
                     confirmVariant="destructive"
                     confirmText={row.id}
-                    confirmPlaceholder="输入 app_id 确认"
+                    confirmPlaceholder="输入应用ID确认"
                     confirmDisabled={updateStatus.isPending}
                     onConfirm={() => updateStatus.mutateAsync({ app_id: row.id, status: "disabled" })}
                   />
@@ -221,8 +266,27 @@ export function AppsPage() {
   const pageItems = filteredSorted.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   return (
-    <div className="space-y-4">
-      <div className="text-lg font-semibold">应用</div>
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-border/70 bg-gradient-to-br from-card/90 via-card/70 to-background p-6 shadow-lg shadow-black/30">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-xs tracking-wider text-primary">应用</div>
+            <div className="text-2xl font-semibold text-foreground">应用</div>
+            <div className="text-sm text-muted-foreground">管理对外 model_id（public_model_id），并绑定知识库（KB）与检索策略。</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/kbs">知识库</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/observability">观测</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/settings">设置</Link>
+            </Button>
+          </div>
+        </div>
+      </div>
 
       <Card
         title="列表"
@@ -230,7 +294,7 @@ export function AppsPage() {
         actions={
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button>新建 App</Button>
+              <Button>新建应用</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -289,16 +353,16 @@ export function AppsPage() {
                   <div className="space-y-2">
                     <div>快速开始：</div>
                     <ol className="list-inside list-decimal text-left">
-                      <li>新建 App</li>
-                      <li>进入 App 详情绑定知识库（KB）</li>
-                      <li>进入知识库详情，在「数据源/任务」中触发抓取与索引</li>
+                      <li>新建应用</li>
+                      <li>进入应用详情绑定知识库（KB）</li>
+                      <li>进入知识库详情，在「数据源/运行」中触发采集与构建索引</li>
                       <li>在客户端/Widget 调试后发布</li>
                     </ol>
                   </div>
                 }
               actions={
                 <Button type="button" onClick={() => setCreateOpen(true)}>
-                  新建 App
+                  新建应用
                 </Button>
               }
             />

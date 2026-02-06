@@ -1,4 +1,14 @@
-import { BarChart3, Boxes, Database, Eye, FileText, Home, LogOut, ScrollText, Settings, ThumbsUp, type LucideIcon } from "lucide-react";
+import {
+  Boxes,
+  Database,
+  Eye,
+  Home,
+  LogOut,
+  ScrollText,
+  Settings,
+  ThumbsUp,
+  type LucideIcon,
+} from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,6 +26,11 @@ import { Separator } from "../components/ui/separator";
 type NavItem = {
   to: string;
   label: string;
+  /**
+   * 可选：更长的解释（hover title）。
+   * 用于保持侧边栏精简，同时又能保留英文/补充说明。
+   */
+  title?: string;
   icon: LucideIcon;
 };
 
@@ -26,38 +41,32 @@ type NavGroup = {
 
 /**
  * 分组导航配置
- * 首页 + 三板块：内容管理 | 运营监控 | 系统
+ * 说明：保留清晰分组（知识构建 / 运营监控 / 系统）。
+ * KB-first 的体现放在：文案统一、入口去重复、页面内闭环，而不是把入口“折叠/下沉”。
  */
 const navGroups: NavGroup[] = [
   {
     title: "",
-    items: [
-      { to: "/", label: "首页", icon: Home },
-    ],
+    items: [{ to: "/", label: "首页", icon: Home }],
   },
   {
-    title: "内容管理",
+    title: "知识构建",
     items: [
-      { to: "/kbs", label: "知识库", icon: Database },
-      { to: "/pages", label: "内容", icon: FileText },
-      { to: "/apps", label: "应用", icon: Boxes },
+      { to: "/kbs", label: "知识库", title: "知识库（Collections）", icon: Database },
+      { to: "/jobs", label: "运行中心", title: "采集/构建索引的运行记录", icon: ScrollText },
+      { to: "/apps", label: "应用", title: "应用（Apps）", icon: Boxes },
     ],
   },
   {
     title: "运营监控",
     items: [
       { to: "/feedback", label: "反馈", icon: ThumbsUp },
-      { to: "/quality", label: "质量", icon: BarChart3 },
-      { to: "/observability", label: "观测", icon: Eye },
-      { to: "/jobs", label: "任务中心", icon: ScrollText },
+      { to: "/observability", label: "观测/排障", title: "观测/排障（Observability）", icon: Eye },
     ],
   },
   {
     title: "系统",
-    items: [
-      { to: "/audit", label: "审计", icon: ScrollText },
-      { to: "/settings", label: "设置", icon: Settings },
-    ],
+    items: [{ to: "/settings", label: "设置", icon: Settings }],
   },
 ];
 
@@ -66,6 +75,7 @@ const flatNavItems = navGroups.flatMap((g) => g.items);
 
 function normalizeNavPath(pathname: string) {
   if (pathname === "/") return "/";
+
   const found = flatNavItems.find((it) => it.to !== "/" && pathname.startsWith(it.to));
   return found?.to || "/";
 }
@@ -79,6 +89,8 @@ export function AdminLayout() {
   const wsLabel = ws.workspaces.find((w) => w.id === ws.workspaceId)?.name || ws.workspaceId;
   const breadcrumbItems = useBreadcrumb();
   const currentNav = normalizeNavPath(location.pathname);
+
+  const visibleNavGroups = navGroups;
 
   useEffect(() => {
     if (!me.error) return;
@@ -102,7 +114,8 @@ export function AdminLayout() {
                 onChange={(e) => {
                   ws.setWorkspaceId(e.target.value);
                   qc.invalidateQueries();
-                  navigate("/kbs", { replace: true });
+                  // 切换工作区后回到首页：减少“切换后落在某个割裂子页面”的困惑
+                  navigate("/", { replace: true });
                 }}
               >
                 {(ws.workspaces || []).length ? (
@@ -119,14 +132,14 @@ export function AdminLayout() {
           </div>
 
           <nav className="space-y-4">
-            {navGroups.map((group, groupIdx) => (
+            {visibleNavGroups.map((group, groupIdx) => (
               <div key={group.title || `group-${groupIdx}`}>
-                {group.title && groupIdx > 0 && <Separator className="mb-3" />}
-                {group.title && (
-                  <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
-                    {group.title}
-                  </div>
-                )}
+                {group.title && groupIdx > 0 ? <Separator className="mb-3" /> : null}
+
+                {group.title ? (
+                  <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">{group.title}</div>
+                ) : null}
+
                 <div className="space-y-1">
                   {group.items.map((it) => {
                     const Icon = it.icon;
@@ -135,6 +148,7 @@ export function AdminLayout() {
                         key={it.to}
                         to={it.to}
                         end={it.to === "/"}
+                        title={it.title || it.label}
                         className={({ isActive }) =>
                           cn(
                             "flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted",
@@ -177,7 +191,8 @@ export function AdminLayout() {
                   onChange={(e) => {
                     ws.setWorkspaceId(e.target.value);
                     qc.invalidateQueries();
-                    navigate("/kbs", { replace: true });
+                    // 与桌面端一致：切换工作区后回到 Dashboard，减少“切换后落在割裂子页面”的困惑
+                    navigate("/", { replace: true });
                   }}
                 >
                   {(ws.workspaces || []).length ? (

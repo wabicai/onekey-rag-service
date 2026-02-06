@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 
 import { ApiErrorBanner } from "../components/ApiErrorBanner";
@@ -23,6 +23,8 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Select } from "../components/ui/select";
 import { Separator } from "../components/ui/separator";
+import { FilterChips, type FilterChip } from "../components/FilterChips";
+import { EntityLinksBar } from "../components/EntityLinksBar";
 import { apiFetch } from "../lib/api";
 import { cn } from "../lib/utils";
 import { useWorkspace } from "../lib/workspace";
@@ -49,6 +51,33 @@ export function KbsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [createOpen, setCreateOpen] = useState(false);
+  const [sp, setSp] = useSearchParams();
+
+  // 允许从 Dashboard / 其他页面通过 ?create=1 直接打开创建向导
+  // 目的：把“想新建 KB”的动作连到知识库页面，而不是让用户自己再点一次按钮。
+  const createParam = (sp.get("create") || "").trim();
+  const appIdFilter = (sp.get("app_id") || "").trim();
+
+  function updateUrlFilter(nextKV: Array<[string, string | null]>) {
+    const next = new URLSearchParams(sp);
+    for (const [k, v] of nextKV) {
+      const vv = (v || "").trim();
+      if (!vv) next.delete(k);
+      else next.set(k, vv);
+    }
+    setSp(next, { replace: true });
+  }
+
+  useEffect(() => {
+    if (createParam !== "1") return;
+    setCreateOpen(true);
+    // 用完即清：避免刷新/返回时反复弹出
+    const next = new URLSearchParams(sp);
+    next.delete("create");
+    setSp(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createParam]);
+
   const q = useQuery({
     queryKey: ["kbs", workspaceId],
     queryFn: () => apiFetch<KbsResp>(`/admin/api/workspaces/${workspaceId}/kbs`),
@@ -89,7 +118,7 @@ export function KbsPage() {
       setCreateOpen(false);
       await qc.invalidateQueries({ queryKey: ["kbs", workspaceId] });
       toast.success("已创建知识库，前往配置数据源");
-      navigate(`/kbs/${data.id}`);
+      navigate(`/kbs/${encodeURIComponent(data.id)}`);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "创建失败"),
   });
@@ -107,14 +136,30 @@ export function KbsPage() {
 
   const [search, setSearch] = useState("");
 
+  const chips: FilterChip[] = [
+    appIdFilter
+      ? {
+          key: "app_id",
+          label: "应用",
+          value: appIdFilter,
+          onRemove: () => updateUrlFilter([["app_id", null]]),
+        }
+      : null,
+  ].filter(Boolean) as FilterChip[];
+
   const filtered = useMemo(() => {
     const items = q.data?.items || [];
-    if (!search.trim()) return items;
-    return items.filter((it) => {
+
+    const byApp = appIdFilter
+      ? items.filter((it) => (it.referenced_by?.items || []).some((x) => x.app_id === appIdFilter))
+      : items;
+
+    if (!search.trim()) return byApp;
+    return byApp.filter((it) => {
       const s = search.toLowerCase();
       return it.name.toLowerCase().includes(s) || it.id.toLowerCase().includes(s);
     });
-  }, [q.data?.items, search]);
+  }, [q.data?.items, search, appIdFilter]);
 
   const stepper = (
     <div className="flex items-center gap-3 text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -139,11 +184,12 @@ export function KbsPage() {
       <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-gradient-to-br from-card/80 via-card/60 to-background p-6 shadow-xl shadow-black/30">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.15em] text-primary">Knowledge</div>
+            <div className="text-xs tracking-wider text-primary">知识库</div>
             <div className="text-2xl font-semibold text-foreground">知识库</div>
             <div className="text-sm text-muted-foreground">
-              统一管理数据源、抓取与索引。支持文件导入与网站爬虫。
+              统一管理数据源、采集与构建索引。支持文件导入与网站采集（爬虫）。
             </div>
+            <EntityLinksBar appId={appIdFilter} className="mt-2" />
           </div>
           <div className="flex items-center gap-2">
             <Dialog open={createOpen} onOpenChange={(open) => (setCreateOpen(open), open || setWizardStep(1))}>
@@ -153,35 +199,33 @@ export function KbsPage() {
               <DialogContent className="max-w-3xl space-y-4">
                 <DialogHeader className="space-y-2">
                   <DialogTitle>新建知识库向导（3 步）</DialogTitle>
-                  <DialogDescription>文件导入 / 网站爬虫 / 空知识库，分段配置与调度同步完成。</DialogDescription>
+                  <DialogDescription>网站爬虫 / 空知识库（文件导入功能开发中）。</DialogDescription>
                   {stepper}
                 </DialogHeader>
                 {create.error ? <ApiErrorBanner error={create.error} /> : null}
                 {wizardStep === 1 ? (
                   <div className="space-y-4">
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 gap-3">
                       {[
-                        { key: "file", title: "文件导入（开发中）", desc: "拖拽上传，适合 MD / PDF / DOCX", disabled: true },
-                        { key: "crawler", title: "网站爬虫", desc: "从站点抓取页面，按规则过滤" },
+                        { key: "crawler", title: "网站爬虫", desc: "从站点采集页面，按规则过滤" },
                         { key: "empty", title: "空知识库", desc: "先创建，稍后再配置数据源" },
                       ].map((opt) => (
                         <button
                           key={opt.key}
                           type="button"
-                          onClick={() => {
-                            if (opt.disabled) return;
-                            setSourceType(opt.key as typeof sourceType);
-                          }}
+                          onClick={() => setSourceType(opt.key as typeof sourceType)}
                           className={cn(
                             "group rounded-xl border border-border/70 bg-card/60 p-4 text-left transition hover:border-primary/60 hover:bg-card/90",
-                            sourceType === opt.key ? "border-primary/80 shadow-[0_0_0_1px_rgba(181,255,102,0.6)]" : "",
-                            opt.disabled ? "cursor-not-allowed opacity-50 hover:border-border/70 hover:bg-card/60" : ""
+                            sourceType === opt.key ? "border-primary/80 shadow-[0_0_0_1px_hsl(var(--primary)/0.55)]" : ""
                           )}
                         >
                           <div className="text-sm font-semibold text-foreground">{opt.title}</div>
                           <div className="text-xs text-muted-foreground">{opt.desc}</div>
                         </button>
                       ))}
+                    </div>
+                    <div className="rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">
+                      文件导入功能开发中：先使用「网站爬虫」或「空知识库」完成创建，后续再补充导入入口。
                     </div>
                     <Separator />
                     <div className="grid grid-cols-2 gap-3">
@@ -248,8 +292,8 @@ export function KbsPage() {
                   <div className="space-y-4">
                     <div className="grid grid-cols-3 gap-3">
                       {[
-                        { key: "manual", title: "手动触发", desc: "创建后在任务中心触发" },
-                        { key: "daily", title: "每日调度", desc: "每天定时抓取/索引" },
+                        { key: "manual", title: "手动触发", desc: "创建后在运行中心触发" },
+                        { key: "daily", title: "每日调度", desc: "每天定时采集/构建索引" },
                         { key: "weekly", title: "每周调度", desc: "每周巡检更新" },
                       ].map((opt) => (
                         <button
@@ -258,7 +302,7 @@ export function KbsPage() {
                           onClick={() => setScheduleMode(opt.key as typeof scheduleMode)}
                           className={cn(
                             "group rounded-xl border border-border/70 bg-card/60 p-4 text-left transition hover:border-primary/60 hover:bg-card/90",
-                            scheduleMode === opt.key ? "border-primary/80 shadow-[0_0_0_1px_rgba(181,255,102,0.6)]" : ""
+                            scheduleMode === opt.key ? "border-primary/80 shadow-[0_0_0_1px_hsl(var(--primary)/0.55)]" : ""
                           )}
                         >
                           <div className="text-sm font-semibold text-foreground">{opt.title}</div>
@@ -295,7 +339,7 @@ export function KbsPage() {
                 ) : null}
                 <DialogFooter className="flex items-center justify-between">
                   <div className="text-xs text-muted-foreground">
-                    支持 MD / PDF / DOCX / TXT / CSV / HTML 格式
+                    网站爬虫/空知识库：可立即使用；文件导入功能开发中（计划支持 MD / PDF / DOCX / TXT / CSV / HTML）。
                   </div>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" disabled={wizardStep === 1} onClick={() => setWizardStep((p) => (p === 1 ? 1 : ((p - 1) as any)))}>
@@ -328,7 +372,7 @@ export function KbsPage() {
             </div>
           </div>
           <div className="rounded-xl border border-border/70 bg-card/70 p-4">
-            <div className="text-xs text-muted-foreground">有引用的应用</div>
+            <div className="text-xs text-muted-foreground">被应用引用的 KB</div>
             <div className="text-2xl font-semibold text-foreground">
               {(q.data?.items || []).filter((i) => (i.referenced_by?.total || 0) > 0).length}
             </div>
@@ -351,9 +395,41 @@ export function KbsPage() {
       >
         {q.isLoading ? <div className="text-sm text-muted-foreground">加载中...</div> : null}
         {q.error ? <ApiErrorBanner error={q.error} /> : null}
+
+        {chips.length ? (
+          <div className="pb-3">
+            <FilterChips items={chips} />
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>当前仅展示被该应用引用的知识库。</span>
+              {appIdFilter ? (
+                <>
+                  <span className="text-border">·</span>
+                  <Link className="underline underline-offset-2" to={`/apps/${encodeURIComponent(appIdFilter)}`}>
+                    应用详情
+                  </Link>
+                  <Link
+                    className="underline underline-offset-2"
+                    to={`/observability?app_id=${encodeURIComponent(appIdFilter)}`}
+                    title="按 app_id 过滤观测事件"
+                  >
+                    观测（按应用）
+                  </Link>
+                  <Link className="underline underline-offset-2" to="/apps">
+                    应用列表
+                  </Link>
+                </>
+              ) : null}
+              <span className="text-border">·</span>
+              <Link className="underline underline-offset-2" to="/kbs" title="移除 app_id 过滤条件">
+                清除筛选
+              </Link>
+            </div>
+          </div>
+        ) : null}
+
         {!filtered.length ? (
           <EmptyState
-            description="新建知识库后，可在详情页配置数据源，并在任务中心触发抓取与索引。"
+            description="新建知识库后，可在详情页配置数据源，并在运行中心触发采集与构建索引。"
             actions={
               <Button type="button" onClick={() => setCreateOpen(true)}>
                 新建知识库
@@ -378,6 +454,26 @@ export function KbsPage() {
                     <td className="px-4 py-3">
                       <div className="font-semibold text-foreground">{it.name}</div>
                       <div className="font-mono text-[11px] text-muted-foreground">{it.id}</div>
+                      {it.referenced_by?.items?.length ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+                          <span>引用：</span>
+                          {it.referenced_by.items
+                            .slice(0, 3)
+                            .map((a) => (
+                              <Link
+                                key={a.app_id}
+                                className="rounded-md border border-border/60 bg-muted/30 px-1.5 py-0.5 hover:bg-muted/40"
+                                to={`/apps/${encodeURIComponent(a.app_id)}`}
+                                title={`打开应用：${a.name}（app_id=${a.app_id}）`}
+                              >
+                                {a.name || a.app_id}
+                              </Link>
+                            ))}
+                          {it.referenced_by.items.length > 3 ? (
+                            <span className="text-muted-foreground/70">+{it.referenced_by.items.length - 3} 更多</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3">
                       <KbStatsSummary
@@ -397,16 +493,23 @@ export function KbsPage() {
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{it.updated_at || "-"}</td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={() => navigate(`/kbs/${it.id}`)}>
-                          详情
-                        </Button>
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => navigate(`/jobs?kb_id=${encodeURIComponent(it.id)}`)}
+                          onClick={() => navigate(`/kbs/${encodeURIComponent(it.id)}`)}
+                          title="以知识库为中心：在详情页内完成数据源/内容/运行/观测等操作"
                         >
-                          最近任务
+                          打开
+                        </Button>
+
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(`/kbs/${encodeURIComponent(it.id)}?tab=jobs`)}
+                          title="直接进入：运行（采集/构建索引记录与排障）"
+                        >
+                          运行
                         </Button>
                       </div>
                     </td>

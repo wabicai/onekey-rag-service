@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -12,6 +13,7 @@ import { Textarea } from "../components/ui/textarea";
 import { Card } from "../components/Card";
 import { JsonView } from "../components/JsonView";
 import { ApiErrorBanner } from "../components/ApiErrorBanner";
+import { EntityLinksBar } from "../components/EntityLinksBar";
 import { apiFetch } from "../lib/api";
 import { allocateTopK } from "../lib/kbAllocation";
 import { useWorkspace } from "../lib/workspace";
@@ -51,6 +53,27 @@ export function AppDetailPage() {
   const params = useParams();
   const appId = params.appId || "";
   const qc = useQueryClient();
+
+  // 调试区默认折叠：减少“占屏的大段 JSON”对主流程的干扰
+  const DEBUG_KEY = "admin_app_show_debug";
+  const [showDebug, setShowDebug] = useState<boolean>(() => {
+    try {
+      const v = window.localStorage.getItem(DEBUG_KEY);
+      if (v === "1") return true;
+      if (v === "0") return false;
+      return false;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DEBUG_KEY, showDebug ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [showDebug]);
 
   const app = useQuery({
     queryKey: ["app", workspaceId, appId],
@@ -181,11 +204,59 @@ export function AppDetailPage() {
     <div className="space-y-4">
       <div>
         <div className="text-lg font-semibold">应用详情</div>
-        <div className="mt-1 text-xs text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
           <Link className="underline underline-offset-2" to="/apps">
             返回应用列表
           </Link>
+          <Link className="underline underline-offset-2" to={`/kbs?app_id=${encodeURIComponent(appId)}`}>
+            查看关联 KB（筛选）
+          </Link>
+          <Link className="underline underline-offset-2" to={`/jobs?app_id=${encodeURIComponent(appId)}`}>
+            运行中心（按应用）
+          </Link>
+          <Link className="underline underline-offset-2" to={`/observability?app_id=${encodeURIComponent(appId)}`}>
+            观测（按应用）
+          </Link>
         </div>
+
+        <EntityLinksBar appId={appId} className="mt-2" />
+
+        {bindings.data?.items?.length ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span>关联 KB：</span>
+            {bindings.data.items
+              .filter((b) => b.enabled)
+              .slice(0, 8)
+              .map((b) => (
+                <span key={b.kb_id} className="inline-flex flex-wrap items-center gap-2">
+                  <Link
+                    className="rounded-md border border-border/60 bg-muted/30 px-2 py-1 hover:bg-muted/40"
+                    to={`/kbs/${encodeURIComponent(b.kb_id)}?app_id=${encodeURIComponent(appId)}`}
+                    title={`打开 KB：${b.kb_name || b.kb_id}`}
+                  >
+                    {b.kb_name || b.kb_id}
+                  </Link>
+                  <Link
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    to={`/kbs/${encodeURIComponent(b.kb_id)}?tab=jobs&app_id=${encodeURIComponent(appId)}`}
+                    title="打开该 KB 的运行 Tab（更接近实际运维动作）"
+                  >
+                    运行
+                  </Link>
+                  <Link
+                    className="text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    to={`/observability?app_id=${encodeURIComponent(appId)}&kb_id=${encodeURIComponent(b.kb_id)}`}
+                    title="按应用+KB 过滤观测事件"
+                  >
+                    观测
+                  </Link>
+                </span>
+              ))}
+            {bindings.data.items.filter((b) => b.enabled).length > 8 ? (
+              <span className="text-muted-foreground/70">+{bindings.data.items.filter((b) => b.enabled).length - 8} 更多</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {actionError ? <ApiErrorBanner error={actionError} /> : null}
@@ -254,12 +325,12 @@ export function AppDetailPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-[90px]">enabled</TableHead>
-                  <TableHead className="w-[180px]">kb_id</TableHead>
+                  <TableHead className="w-[220px]">kb_id</TableHead>
                   <TableHead>kb_name</TableHead>
                   <TableHead className="w-[140px]">weight</TableHead>
                   <TableHead className="w-[140px]">priority</TableHead>
                   <TableHead className="w-[140px]">topK（估算）</TableHead>
-                  <TableHead className="w-[120px]">操作</TableHead>
+                  <TableHead className="w-[180px]">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -275,7 +346,19 @@ export function AppDetailPage() {
                         }}
                       />
                     </TableCell>
-                    <TableCell className="font-mono text-xs">{b.kb_id}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {b.kb_id ? (
+                        <Link
+                          className="hover:underline"
+                          to={`/kbs/${encodeURIComponent(b.kb_id)}?app_id=${encodeURIComponent(appId)}`}
+                          title="打开 KB（保留 app_id 上下文）"
+                        >
+                          {b.kb_id}
+                        </Link>
+                      ) : (
+                        "-"
+                      )}
+                    </TableCell>
                     <TableCell>{b.kb_name || <span className="text-muted-foreground">-</span>}</TableCell>
                     <TableCell>
                       <Input
@@ -301,16 +384,23 @@ export function AppDetailPage() {
                       {ragTopK > 0 && b.enabled ? allocMap.get(b.kb_id) ?? "-" : "-"}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          const next = bindingDraft.filter((_, i) => i !== idx);
-                          setBindingDraft(next);
-                        }}
-                      >
-                        移除
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        {b.kb_id ? (
+                          <Button asChild variant="ghost" size="sm">
+                            <Link to={`/kbs/${encodeURIComponent(b.kb_id)}?app_id=${encodeURIComponent(appId)}`}>查看 KB</Link>
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const next = bindingDraft.filter((_, i) => i !== idx);
+                            setBindingDraft(next);
+                          }}
+                        >
+                          移除
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -363,9 +453,24 @@ export function AppDetailPage() {
             </div>
           </Card>
 
-          <Card title="调试" description="服务端返回的原始数据（只读）">
-            <JsonView value={{ app: app.data, bindings: bindings.data }} />
-          </Card>
+          <div className="rounded-xl border border-border/70 bg-card/50">
+            <button
+              type="button"
+              className="flex w-full items-center justify-between p-4 text-left hover:bg-muted/30"
+              onClick={() => setShowDebug((v) => !v)}
+            >
+              <div>
+                <div className="font-medium">调试（只读）</div>
+                <div className="mt-1 text-xs text-muted-foreground">服务端返回的原始数据；默认折叠以避免干扰主流程</div>
+              </div>
+              {showDebug ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            </button>
+            {showDebug ? (
+              <div className="border-t border-border/50 p-4">
+                <JsonView value={{ app: app.data, bindings: bindings.data }} />
+              </div>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

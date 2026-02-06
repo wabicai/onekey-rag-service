@@ -1,5 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 
 import { Card } from "../components/Card";
 import { JsonView } from "../components/JsonView";
@@ -112,12 +113,32 @@ export function SettingsPage() {
       <div className="rounded-2xl border border-border/70 bg-gradient-to-br from-card/90 via-card/70 to-background p-6 shadow-lg shadow-black/30">
         <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.14em] text-primary">Settings</div>
+            <div className="text-xs tracking-wider text-primary">设置</div>
             <div className="text-2xl font-semibold text-foreground">系统设置</div>
             <div className="text-sm text-muted-foreground">模型/检索/作业/监控配置，支持一键测试与健康检查。</div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            workspace <span className="font-mono">{workspaceId}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="mr-2 flex items-center gap-2 text-xs text-muted-foreground">
+              workspace <span className="font-mono">{workspaceId}</span>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/">首页</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/observability">观测</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/observability?has_error=true">观测（仅错误）</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/jobs?status=failed">失败任务</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/kbs">知识库</Link>
+            </Button>
+            <Button asChild variant="outline" size="sm">
+              <Link to="/apps">应用</Link>
+            </Button>
           </div>
         </div>
       </div>
@@ -299,7 +320,17 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        <Card title="合约索引统计" description="全局合约地址到协议的映射统计（在知识库详情页可构建索引）">
+        <Card
+          title="合约索引统计"
+          description="全局合约地址到协议的映射统计（在知识库详情页可构建索引）"
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link to="/kbs">打开知识库</Link>
+              </Button>
+            </div>
+          }
+        >
           <div className="space-y-4 text-sm">
             {contractStats.isLoading ? <div className="text-xs text-muted-foreground">加载中...</div> : null}
             {contractStats.error ? <ApiErrorBanner error={contractStats.error} /> : null}
@@ -326,7 +357,7 @@ export function SettingsPage() {
           </div>
         </Card>
 
-        <Card title="运行配置（脱敏 JSON）" description="用于排障：检索/索引/任务/观测开关">
+        <Card title="运行配置（脱敏 JSON）" description="用于排障：检索/索引/运行/观测开关">
           {settings.isLoading ? <div className="text-sm text-muted-foreground">加载中...</div> : null}
           {settings.error ? <ApiErrorBanner error={settings.error} /> : null}
           {settings.data ? <JsonView value={settings.data} defaultCollapsed /> : null}

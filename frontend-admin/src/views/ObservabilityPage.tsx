@@ -10,6 +10,7 @@ import { Pagination } from "../components/Pagination";
 import { EmptyState } from "../components/EmptyState";
 import { ApiErrorBanner } from "../components/ApiErrorBanner";
 import { FilterChips, type FilterChip } from "../components/FilterChips";
+import { EntityLinksBar } from "../components/EntityLinksBar";
 import { TraceLink } from "../components/TraceLink";
 import { apiFetch } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
@@ -139,24 +140,44 @@ export function ObservabilityPage() {
       <div className="rounded-2xl border border-border/70 bg-gradient-to-br from-card/90 via-card/70 to-background p-6 shadow-lg shadow-black/30">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-xs uppercase tracking-[0.14em] text-primary">Observability</div>
+            <div className="text-xs tracking-wider text-primary">观测</div>
             <div className="text-2xl font-semibold text-foreground">观测 / 请求与资源</div>
             <div className="text-sm text-muted-foreground">按请求事件检索 + 容器资源曲线（支持 1h / 24h / 7d）。</div>
+            <EntityLinksBar appId={appId} kbId={kbId} className="mt-2" />
           </div>
-          <div className="flex items-center gap-2">
-            <div className="text-xs text-muted-foreground">事件时间窗</div>
-            <Select
-              value={dateRange}
-              onChange={(e) => {
-                updateFilter([["date_range", e.target.value]]);
-              }}
-            >
-              <option value="1h">1h</option>
-              <option value="24h">24h</option>
-              <option value="7d">7d</option>
-            </Select>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link to="/">首页</Link>
+            </Button>
+            {kbId ? (
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/kbs/${encodeURIComponent(kbId)}`}>打开 KB</Link>
+              </Button>
+            ) : null}
+            {appId ? (
+              <Button asChild variant="outline" size="sm">
+                <Link to={`/apps/${encodeURIComponent(appId)}`}>打开 App</Link>
+              </Button>
+            ) : null}
+
+            <div className="ml-2 flex items-center gap-2">
+              <div className="text-xs text-muted-foreground">事件时间窗</div>
+              <Select
+                value={dateRange}
+                onChange={(e) => {
+                  updateFilter([["date_range", e.target.value]]);
+                }}
+              >
+                <option value="1h">1h</option>
+                <option value="24h">24h</option>
+                <option value="7d">7d</option>
+              </Select>
+            </div>
           </div>
         </div>
+
+        {/* 已在标题区使用 EntityLinksBar 提供上下文跳转，避免重复入口 */}
+
         <div className="mt-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
           <div className="rounded-xl border border-border/70 bg-background/50 p-4">
             <div className="text-xs text-muted-foreground">CPU（容器）</div>
@@ -288,9 +309,14 @@ export function ObservabilityPage() {
             </div>
           </div>
         </div>
-        <div className="mt-3 text-xs text-muted-foreground font-mono">
-          快速查看：{JSON.stringify(metrics.data?.container?.summary || {})}
-        </div>
+        <details className="mt-3 rounded-md border border-border/60 bg-muted/10 p-3">
+          <summary className="cursor-pointer select-none text-xs text-muted-foreground">
+            Debug（可选）：container.summary（原始 JSON）
+          </summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[11px] text-muted-foreground font-mono">
+            {JSON.stringify(metrics.data?.container?.summary || {}, null, 2)}
+          </pre>
+        </details>
       </Card>
 
       {list.error ? <ApiErrorBanner error={list.error} /> : null}
@@ -402,13 +428,80 @@ export function ObservabilityPage() {
                 return (
                   <tr key={it.id} className="border-t align-top">
                       <td className="py-2 font-mono text-xs">
-                        <Link className="underline underline-offset-2" to={`/observability/retrieval-events/${it.id}`}>
+                        <Link
+                          className="underline underline-offset-2"
+                          to={`/observability/retrieval-events/${it.id}`}
+                          state={{
+                            from: {
+                              // 保留当前筛选：减少「列表 → 详情 → 回列表」时的割裂感
+                              search: sp.toString(),
+                            },
+                          }}
+                        >
                           {it.id}
                         </Link>
                       </td>
                     <td className="py-2 font-mono text-xs text-muted-foreground">{it.created_at || "-"}</td>
-                    <td className="py-2 font-mono text-xs">{it.app_id || "-"}</td>
-                    <td className="py-2 font-mono text-xs">{(it.kb_ids || []).join(",")}</td>
+                    <td className="py-2 font-mono text-xs">
+                      {it.app_id ? (
+                        <span>
+                          <Link
+                            className="underline underline-offset-2"
+                            to={`/apps/${encodeURIComponent(it.app_id)}`}
+                            title="打开 App 详情"
+                          >
+                            {it.app_id}
+                          </Link>
+                          <Link
+                            className="ml-1 text-muted-foreground underline underline-offset-2"
+                            to={`/observability?app_id=${encodeURIComponent(it.app_id)}&date_range=${encodeURIComponent(dateRange)}`}
+                            title="在观测中按该 app_id 过滤"
+                          >
+                            ·筛选
+                          </Link>
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
+                    <td className="py-2 font-mono text-xs">
+                      {(it.kb_ids || []).length ? (
+                        <div className="flex flex-wrap gap-x-2 gap-y-1">
+                          {(it.kb_ids || []).map((kid) => (
+                            <span key={kid}>
+                              <Link
+                                className="underline underline-offset-2"
+                                to={it.app_id
+                                  ? `/kbs/${encodeURIComponent(kid)}?app_id=${encodeURIComponent(it.app_id)}`
+                                  : `/kbs/${encodeURIComponent(kid)}`}
+                                title={it.app_id ? "打开 KB（并保留 app 上下文，便于回到应用）" : "打开 KB 详情"}
+                              >
+                                {kid}
+                              </Link>
+                              <Link
+                                className="ml-1 text-muted-foreground underline underline-offset-2"
+                                to={
+                                  `/kbs/${encodeURIComponent(kid)}?tab=jobs` +
+                                  (it.app_id ? `&app_id=${encodeURIComponent(it.app_id)}` : "")
+                                }
+                                title="打开该 KB 的任务 Tab"
+                              >
+                                ·运行
+                              </Link>
+                              <Link
+                                className="ml-1 text-muted-foreground underline underline-offset-2"
+                                to={`/observability?kb_id=${encodeURIComponent(kid)}&date_range=${encodeURIComponent(dateRange)}`}
+                                title="在观测中按该 kb_id 过滤"
+                              >
+                                ·筛选
+                              </Link>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground">-</span>
+                      )}
+                    </td>
                     <td className="py-2 max-w-[340px]">
                       {it.request_id ? (
                         <TraceLink
@@ -417,6 +510,7 @@ export function ObservabilityPage() {
                           toastText="已复制 request_id"
                           to={`/observability/retrieval-events/${it.id}`}
                           toLabel="事件详情"
+                          linkState={{ from: { search: sp.toString() } }}
                         />
                       ) : (
                         <span className="text-muted-foreground">-</span>

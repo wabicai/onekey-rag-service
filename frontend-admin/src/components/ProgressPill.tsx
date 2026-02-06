@@ -35,6 +35,7 @@ export function ProgressPill(props: {
     }
 
     if (props.type === "crawl") {
+      // 常见字段（后端可能还有更多，我们只展示最有解释力的）
       const discovered = getFiniteNumber(p, "discovered");
       const fetched = getFiniteNumber(p, "fetched");
       const failed = getFiniteNumber(p, "failed");
@@ -42,22 +43,30 @@ export function ProgressPill(props: {
       const total = discovered ?? null;
       const done = fetched ?? null;
       const percent = total != null && done != null ? formatPercent(done, total) : "";
+
       const parts = [
-        done != null && total != null ? `fetched ${done}/${total} ${percent}`.trim() : null,
-        failed != null ? `fail ${failed}` : null,
+        done != null && total != null ? `已采集 ${done}/${total}${percent}` : done != null ? `已采集 ${done}` : null,
+        failed != null ? `失败 ${failed}` : null,
       ].filter(Boolean) as string[];
 
-      return { text: parts.length ? parts.join(" · ") : "crawl", variant: "secondary" as const };
+      return { text: parts.length ? parts.join(" · ") : "采集", variant: "secondary" as const };
     }
 
     if (props.type === "index") {
       const pages = getFiniteNumber(p, "pages");
       const chunks = getFiniteNumber(p, "chunks");
+      // 某些任务会返回 done/total（比如分段/向量化），尽量给出“结果视角”
+      const done = getFiniteNumber(p, "done");
+      const total = getFiniteNumber(p, "total");
+      const percent = total != null && done != null ? formatPercent(done, total) : "";
+
       const parts = [
-        pages != null ? `pages ${pages}` : null,
-        chunks != null ? `chunks ${chunks}` : null,
+        done != null && total != null ? `进度 ${done}/${total}${percent}` : null,
+        pages != null ? `页面 ${pages}` : null,
+        chunks != null ? `分段 ${chunks}` : null,
       ].filter(Boolean) as string[];
-      return { text: parts.length ? parts.join(" · ") : "index", variant: "secondary" as const };
+
+      return { text: parts.length ? parts.join(" · ") : "构建索引", variant: "secondary" as const };
     }
 
     return { text: "progress", variant: "secondary" as const };

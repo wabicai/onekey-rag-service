@@ -2,7 +2,6 @@ import { HashRouter, Navigate, Route, Routes, useLocation } from "react-router-d
 
 import { AdminLayout } from "./views/AdminLayout";
 import { AppDetailPage } from "./views/AppDetailPage";
-import { AuditPage } from "./views/AuditPage";
 import { AppsPage } from "./views/AppsPage";
 import { DashboardPage } from "./views/DashboardPage";
 import { FeedbackPage } from "./views/FeedbackPage";
@@ -12,9 +11,6 @@ import { KbsPage } from "./views/KbsPage";
 import { KbDetailPage } from "./views/KbDetailPage";
 import { LoginPage } from "./views/LoginPage";
 import { ObservabilityPage } from "./views/ObservabilityPage";
-import { PagesPage } from "./views/PagesPage";
-import { PageDetailPage } from "./views/PageDetailPage";
-import { QualityPage } from "./views/QualityPage";
 import { RetrievalEventDetailPage } from "./views/RetrievalEventDetailPage";
 import { SettingsPage } from "./views/SettingsPage";
 import { requireToken } from "./lib/auth";
@@ -45,26 +41,22 @@ export function App() {
           {/* 首页 - 系统总览 */}
           <Route index element={<DashboardPage />} />
 
-          {/* 内容管理 */}
+          {/* KB-first：知识库为中心；其他入口尽量弱化为“承接/配置”。 */}
           <Route path="kbs" element={<KbsPage />} />
           <Route path="kbs/:kbId" element={<KbDetailPage />} />
           <Route path="apps" element={<AppsPage />} />
           <Route path="apps/:appId" element={<AppDetailPage />} />
 
           {/* 详情页 - 保留用于查看单个页面/任务 */}
-          <Route path="pages" element={<PagesPage />} />
-          <Route path="pages/:pageId" element={<PageDetailPage />} />
           <Route path="jobs" element={<JobsPage />} />
           <Route path="jobs/:jobId" element={<JobDetailPage />} />
 
-          {/* 运营监控 */}
+          {/* 观测/排障 */}
           <Route path="feedback" element={<FeedbackPage />} />
-          <Route path="quality" element={<QualityPage />} />
           <Route path="observability" element={<ObservabilityPage />} />
           <Route path="observability/retrieval-events/:eventId" element={<RetrievalEventDetailPage />} />
 
           {/* 系统 */}
-          <Route path="audit" element={<AuditPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

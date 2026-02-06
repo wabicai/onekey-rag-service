@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
 import { Card } from "../components/Card";
 import { JsonView } from "../components/JsonView";
 import { ApiErrorBanner } from "../components/ApiErrorBanner";
 import { TraceLink } from "../components/TraceLink";
+import { EntityLinksBar } from "../components/EntityLinksBar";
+import { Button } from "../components/ui/button";
 import { apiFetch } from "../lib/api";
 import { useWorkspace } from "../lib/workspace";
 
@@ -31,6 +33,11 @@ export function RetrievalEventDetailPage() {
   const { workspaceId } = useWorkspace();
   const params = useParams();
   const eventId = Number(params.eventId || 0);
+  const location = useLocation();
+
+  const rawFromSearch = (location.state as any)?.from?.search as string | undefined;
+  const fromSearch = new URLSearchParams(rawFromSearch || "").toString();
+  const backToList = fromSearch ? `/observability?${fromSearch}` : "/observability";
 
   const q = useQuery({
     queryKey: ["retrieval-event", workspaceId, eventId],
@@ -38,22 +45,52 @@ export function RetrievalEventDetailPage() {
     enabled: !!workspaceId && Number.isFinite(eventId) && eventId > 0,
   });
 
+  const data = q.data;
+  const firstKbId = data?.kb_ids?.[0] || "";
+
   return (
     <div className="space-y-4">
       <div>
         <div className="text-lg font-semibold">检索事件详情</div>
-        <div className="mt-1 text-xs text-muted-foreground">
-          <Link className="underline underline-offset-2" to="/observability">
-            返回列表
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          <Link className="underline underline-offset-2" to={backToList}>
+            返回列表{fromSearch ? "（保留筛选）" : ""}
           </Link>
-          {q.data?.request_id ? (
-            <span className="ml-3">
-              <Link className="underline underline-offset-2" to={`/observability?request_id=${encodeURIComponent(q.data.request_id)}`}>
-                回到列表（带 request_id）
-              </Link>
-            </span>
+          {data?.request_id ? (
+            <Link className="underline underline-offset-2" to={`/observability?request_id=${encodeURIComponent(data.request_id)}`}>
+              回到列表（带 request_id）
+            </Link>
           ) : null}
         </div>
+
+        {/* 快捷动作：把“观测 → 定位 KB → 看运行/数据源 → 回修复”串起来 */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {firstKbId ? (
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/kbs/${encodeURIComponent(firstKbId)}?tab=jobs${data?.app_id ? `&app_id=${encodeURIComponent(data.app_id)}` : ""}`}>
+                打开该 KB（运行）
+              </Link>
+            </Button>
+          ) : null}
+          {firstKbId ? (
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/kbs/${encodeURIComponent(firstKbId)}?tab=sources${data?.app_id ? `&app_id=${encodeURIComponent(data.app_id)}` : ""}`}>
+                打开该 KB（数据源）
+              </Link>
+            </Button>
+          ) : null}
+          {firstKbId ? (
+            <Button asChild size="sm" variant="outline">
+              <Link
+                to={`/observability?kb_id=${encodeURIComponent(firstKbId)}${data?.app_id ? `&app_id=${encodeURIComponent(data.app_id)}` : ""}`}
+              >
+                回到观测（该 KB）
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+
+        <EntityLinksBar appId={data?.app_id} kbId={firstKbId} className="mt-2" />
       </div>
 
       {q.isLoading ? <div className="text-sm text-muted-foreground">加载中...</div> : null}
@@ -73,11 +110,37 @@ export function RetrievalEventDetailPage() {
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">app_id</div>
-                <div className="font-mono text-xs">{q.data.app_id || "-"}</div>
+                {q.data.app_id ? (
+                  <Link className="font-mono text-xs underline underline-offset-2" to={`/apps/${encodeURIComponent(q.data.app_id)}`}>
+                    {q.data.app_id}
+                  </Link>
+                ) : (
+                  <div className="font-mono text-xs">-</div>
+                )}
               </div>
               <div>
                 <div className="text-xs text-muted-foreground">kb_ids</div>
-                <div className="font-mono text-xs">{(q.data.kb_ids || []).join(",")}</div>
+                {(q.data.kb_ids || []).length ? (
+                  <div className="flex flex-wrap gap-2">
+                    {(q.data.kb_ids || []).slice(0, 4).map((kbId) => (
+                      <Link
+                        key={kbId}
+                        className="rounded border border-border/60 bg-muted/30 px-2 py-0.5 font-mono text-xs hover:bg-muted"
+                        to={q.data.app_id
+                          ? `/kbs/${encodeURIComponent(kbId)}?app_id=${encodeURIComponent(q.data.app_id)}`
+                          : `/kbs/${encodeURIComponent(kbId)}`}
+                        title={q.data.app_id ? "打开 KB（并保留 app 上下文）" : "打开该知识库"}
+                      >
+                        {kbId}
+                      </Link>
+                    ))}
+                    {(q.data.kb_ids || []).length > 4 ? (
+                      <span className="font-mono text-xs text-muted-foreground">+{(q.data.kb_ids || []).length - 4}</span>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="font-mono text-xs">-</div>
+                )}
               </div>
               <div className="lg:col-span-2">
                 <div className="text-xs text-muted-foreground">request_id</div>

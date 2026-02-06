@@ -19,16 +19,21 @@ export function KbStatsSummary(props: {
   return (
     <div className={cn("space-y-1 text-xs", props.className)}>
       <div className="text-muted-foreground">
-        pages <span className="font-mono text-foreground">{pagesTotal}</span> · chunks{" "}
-        <span className="font-mono text-foreground">{chunksTotal}</span> · coverage{" "}
-        <span className="font-mono text-foreground">{coverage}%</span>
+        内容页 <span className="font-mono text-foreground">{pagesTotal}</span>
+        <span className="mx-2 text-border">·</span>
+        分段 <span className="font-mono text-foreground">{chunksTotal}</span>
+        <span className="mx-2 text-border">·</span>
+        向量覆盖 <span className="font-mono text-foreground">{coverage}%</span>
       </div>
+
       <div className="text-muted-foreground">
-        last_crawled <span className="font-mono text-foreground">{lastCrawled}</span>
+        最近采集 <span className="font-mono text-foreground">{lastCrawled}</span>
       </div>
+
       <div className="text-muted-foreground">
-        last_indexed <span className="font-mono text-foreground">{lastIndexed}</span> · with_embedding{" "}
-        <span className="font-mono text-foreground">{withEmbedding}</span>
+        最近构建索引 <span className="font-mono text-foreground">{lastIndexed}</span>
+        <span className="mx-2 text-border">·</span>
+        已向量化 <span className="font-mono text-foreground">{withEmbedding}</span>
       </div>
     </div>
   );

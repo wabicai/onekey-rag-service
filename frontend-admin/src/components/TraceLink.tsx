@@ -20,6 +20,8 @@ export function TraceLink(props: {
   toastText?: string;
   to?: string;
   toLabel?: string;
+  /** react-router Link state，用于详情页“智能返回”保留筛选上下文 */
+  linkState?: any;
   prefix?: ReactNode;
   className?: string;
   textClassName?: string;
@@ -55,7 +57,7 @@ export function TraceLink(props: {
           aria-label={props.toLabel || "联查"}
           title={props.toLabel || "联查"}
         >
-          <Link to={props.to}>
+          <Link to={props.to} state={props.linkState}>
             <ArrowUpRight className="h-4 w-4" />
           </Link>
         </Button>

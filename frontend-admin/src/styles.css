@@ -46,8 +46,8 @@
     @apply bg-background text-foreground;
     font-family: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     background-image:
-      radial-gradient(1200px at 20% 20%, rgba(181, 255, 102, 0.08), transparent),
-      radial-gradient(900px at 80% 10%, rgba(60, 255, 190, 0.05), transparent),
+      radial-gradient(1200px at 20% 20%, hsl(var(--primary) / 0.10), transparent 60%),
+      radial-gradient(900px at 80% 10%, hsl(var(--primary) / 0.06), transparent 55%),
       linear-gradient(135deg, rgba(18, 25, 24, 0.95) 0%, rgba(10, 14, 15, 0.96) 100%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0) 60%);
     background-attachment: fixed;
