@@ -796,7 +796,7 @@ services:
       - api
 
   frontend-tx-analyzer:
-    image: node:20-alpine
+    image: node:22.23.4-alpine
     profiles: ["frontend", "tx-analyzer"]
     ports:
       - "5175:5175"

@@ -213,7 +213,7 @@ services:
   #   restart: unless-stopped
 
   frontend-chat:
-    image: node:20-alpine
+    image: node:22.23.4-alpine
     profiles: ["frontend"]
     working_dir: /app
     command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev"]
@@ -230,7 +230,7 @@ services:
         condition: service_started
 
   frontend-admin:
-    image: node:20-alpine
+    image: node:22.23.4-alpine
     profiles: ["frontend"]
     working_dir: /app
     command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev"]
@@ -323,7 +323,7 @@ services:
 
   # Web3 Transaction Analyzer Frontend
   frontend-tx-analyzer:
-    image: node:20-alpine
+    image: node:22.23.4-alpine
     profiles: ["tx-analyzer"]
     working_dir: /app
     command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev -- --host 0.0.0.0"]
@@ -380,7 +380,7 @@ services:
 
   # DeFi Rating Frontend
   frontend-defi-rating:
-    image: node:20-alpine
+    image: node:22.23.4-alpine
     profiles: ["defi-rating"]
     working_dir: /app
     command: ["sh", "-c", "corepack enable && pnpm install --frozen-lockfile && pnpm dev -- --host 0.0.0.0"]

@@ -1,5 +1,5 @@
 # ==================== Stage 1: Build Widget ====================
-FROM node:20-alpine AS widget-builder
+FROM node:22.23.4-alpine AS widget-builder
 
 WORKDIR /build
 
@@ -12,7 +12,7 @@ COPY frontend-chat/ ./
 RUN pnpm build
 
 # ==================== Stage 2: Build Admin UI ====================
-FROM node:20-alpine AS admin-builder
+FROM node:22.23.4-alpine AS admin-builder
 
 WORKDIR /build
 
