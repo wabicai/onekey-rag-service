@@ -26,6 +26,7 @@ from onekey_rag_service.db import (
     ensure_indexes,
     ensure_pgvector_extension,
 )
+from onekey_rag_service.access_log import AccessLogMiddleware, get_request_id
 from onekey_rag_service.logging import configure_logging
 from onekey_rag_service.models import Base, Feedback, Job, KnowledgeBase, RagApp, RagAppKnowledgeBase, RetrievalEvent
 from onekey_rag_service.observability.langfuse import build_langfuse_callback
@@ -106,6 +107,9 @@ async def _widget_headers(request: Request, call_next):
     return resp
 
 
+app.add_middleware(AccessLogMiddleware)
+
+
 @app.exception_handler(HTTPException)
 async def _openai_http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -139,7 +143,7 @@ async def _openai_validation_exception_handler(request: Request, exc: RequestVal
 
 @app.exception_handler(Exception)
 async def _openai_unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("未处理异常 path=%s err=%s", request.url.path, exc)
+    logger.exception("未处理异常 path=%s request_id=%s err=%s", request.url.path, get_request_id(), exc)
     return JSONResponse(
         status_code=500,
         content={
